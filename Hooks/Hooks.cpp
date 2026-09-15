@@ -1,6 +1,7 @@
 #include "Hooks.hpp"
 
 #include "FighterCommandHooks.hpp"
+#include "ActionRequestsHooks.hpp"
 
 #include "../Core/Logger.hpp"
 
@@ -14,6 +15,15 @@ namespace HJ::Hooks
         {
             Logger::Error(
                 "Failed to initialize FighterCommand hooks."
+            );
+
+            return false;
+        }
+
+        if (!ActionRequest::Initialize())
+        {
+            Logger::Error(
+                "Failed to initialize ActionRequest hooks."
             );
 
             return false;

@@ -178,6 +178,7 @@
     <ClInclude Include="HeavensJudgment.hpp" />
     <ClInclude Include="external\safetyhook\safetyhook.hpp" />
     <ClInclude Include="external\safetyhook\Zydis.h" />
+    <ClInclude Include="Hooks\ActionRequestsHooks.hpp" />
     <ClInclude Include="Hooks\FighterCommandHooks.hpp" />
     <ClInclude Include="Hooks\Hooks.hpp" />
   </ItemGroup>
@@ -190,6 +191,7 @@
     <ClCompile Include="HeavensJudgment.cpp" />
     <ClCompile Include="external\safetyhook\safetyhook.cpp" />
     <ClCompile Include="external\safetyhook\Zydis.c" />
+    <ClCompile Include="Hooks\ActionRequestHooks.cpp" />
     <ClCompile Include="Hooks\FighterCommandHooks.cpp" />
     <ClCompile Include="Hooks\Hooks.cpp" />
   </ItemGroup>

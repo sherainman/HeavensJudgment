@@ -1,4 +1,5 @@
 #include "FighterCommandHooks.hpp"
+#include "ActionRequestsHooks.hpp"
 
 #include "../Core/Logger.hpp"
 
@@ -9,7 +10,6 @@
 #include <intrin.h>
 #include <sstream>
 #include <atomic>
-#include <cstring>
 
 #include <mutex>
 #include <unordered_set>
@@ -18,12 +18,10 @@ namespace
 {
     SafetyHookInline g_checkEligibilityHook{};
     SafetyHookInline g_namedStateHook{};
-    SafetyHookInline g_attackBehaviorHook{};
 
     std::atomic<bool> g_f6WasDown{ false };
     std::atomic<ULONGLONG> g_traceUntil{ 0 };
     std::atomic<ULONGLONG> g_traceStartedAt{ 0 };
-    std::atomic<bool> g_attackOverrideUsed{ false };
 
     constexpr ULONGLONG TraceDurationMs = 2000;
 
@@ -87,7 +85,7 @@ namespace
                 now + TraceDurationMs
             );
 
-            g_attackOverrideUsed.store(false);
+            HJ::Hooks::ActionRequest::EnableTigerLightToHeavyTest();
 
             {
                 std::scoped_lock lock(g_traceMutex);
@@ -129,118 +127,25 @@ namespace
         return false;
     }
 
-    void __fastcall AttackBehaviorHook(
-        std::uintptr_t container,
-        std::uint32_t packedCommand,
-        const char* stateName)
+    DWORD WINAPI TraceHotkeyThread(LPVOID)
     {
-        const auto caller =
-            reinterpret_cast<std::uintptr_t>(
-                _ReturnAddress()
-                );
+        HJ::Logger::Info(
+            "Combat trace hotkey ready. Press F6 to capture."
+        );
 
-        const bool traceActive =
+        while (true)
+        {
+            UpdateTraceHotkey();
+
+            // This also ensures the FINISHED message appears
+            // even if no eligibility calls happen near the end.
             IsTraceActive();
 
-        const std::uint32_t originalPackedCommand =
-            packedCommand;
-
-        //
-        // control test
-        //
-        // in Tiger:
-        //
-        // light:
-        // packed = 0x00160042
-        //
-        // heavy:
-        // packed = 0x00520042
-        //
-       
-        if (traceActive &&
-            !g_attackOverrideUsed.load() &&
-            caller == 0x142EFC750 &&
-            packedCommand == 0x00160042 &&
-            stateName != nullptr &&
-            std::strcmp(stateName, "Attack") == 0)
-        {
-            packedCommand =
-                0x00520042;
-
-            g_attackOverrideUsed.store(true);
-
-            HJ::Logger::Info(
-                "ATTACK OVERRIDE: "
-                "Tiger light 0x00160042 -> "
-                "Tiger heavy 0x00520042"
-            );
+            Sleep(10);
         }
 
-        if (traceActive)
-        {
-            const std::uint32_t commandKey =
-                packedCommand & 0xFFFF;
-
-            const std::uint32_t variant =
-                packedCommand >> 16;
-
-            std::ostringstream stream;
-
-            stream
-                << "ATTACK TRACE"
-                << " name=\""
-                << (stateName ? stateName : "<null>")
-                << "\""
-                << " container=0x"
-                << std::hex
-                << container
-                << " original=0x"
-                << originalPackedCommand
-                << " packed=0x"
-                << packedCommand
-                << " key=0x"
-                << commandKey
-                << " variant=0x"
-                << variant
-                << " caller=0x"
-                << caller;
-
-            HJ::Logger::Info(
-                stream.str()
-            );
-        }
-
-        g_attackBehaviorHook.call<void>(
-            container,
-            packedCommand,
-            stateName
-        );
+        return 0;
     }
-
-    // addresses:
-    // ulonglong FUN_142E8F500(
-    //  ulonglong param_1,
-    //  uint      param_2, // fighter command key
-    //  uint      param_3, // style
-    //  uint      param_4  // option/behavior fl;ag?
-    // );
-    // 
-    // 
-    // style fightercommand key:
-    // snake = 0x40
-    // crane = 0x41
-    // tiger = 0x42
-    // boxer = 0x73
-    // 
-    // stores at:
-    // DAT_14430BE48 + 0xE8 
-    // 
-    // windosx x64 
-    // rcx = context
-    // edx = key
-    // r8d = mode
-    // r9b = option
-    //
 
     void* __fastcall NamedStateHook(
         std::uintptr_t stateContainer,
@@ -283,7 +188,30 @@ namespace
         );
     }
 
-
+    // addresses:
+    // ulonglong FUN_142E8F500(
+    //  ulonglong param_1,
+    //  uint      param_2, // fighter command key
+    //  uint      param_3, // style
+    //  uint      param_4  // option/behavior fl;ag?
+    // );
+    // 
+    // 
+    // style fightercommand key:
+    // snake = 0x40
+    // crane = 0x41
+    // tiger = 0x42
+    // boxer = 0x73
+    // 
+    // stores at:
+    // DAT_14430BE48 + 0xE8 
+    // 
+    // windosx x64 
+    // rcx = context
+    // edx = key
+    // r8d = mode
+    // r9b = option
+    //
     std::uint64_t __fastcall CheckEligibilityHook(
         std::uint64_t context,
         std::uint32_t key,
@@ -364,30 +292,14 @@ namespace
                     << " result="
                     << (eligible ? "true" : "false");
 
-                HJ::Logger::Info(stream.str());
+                HJ::Logger::Info(
+                    stream.str()
+                );
             }
         }
 
         return result;
     }
-}
-
-DWORD WINAPI TraceHotkeyThread(LPVOID)
-{
-    HJ::Logger::Info(
-        "Combat trace hotkey ready. Press F6 to capture."
-    );
-
-    while (true)
-    {
-        UpdateTraceHotkey();
-
-        IsTraceActive();
-
-        Sleep(10);
-    }
-
-    return 0;
 }
 
 namespace HJ::Hooks::FighterCommand
@@ -419,47 +331,19 @@ namespace HJ::Hooks::FighterCommand
         constexpr std::uintptr_t CheckEligibilityRva =
             0x02E8F500;
 
-
+        //
+        // FUN_1403B43D0
+        // 0x1403B43D0 - 0x140000000
+        // = 0x003B43D0
+        //
         constexpr std::uintptr_t NamedStateRva =
             0x003B43D0;
-
-        constexpr std::uintptr_t AttackBehaviorRva =
-            0x02F21D80;
 
         const auto target =
             base + CheckEligibilityRva;
 
         const auto namedStateTarget =
             base + NamedStateRva;
-
-        const auto attackBehaviorTarget =
-            base + AttackBehaviorRva;
-        {
-            std::ostringstream stream;
-
-            stream
-                << "Installing attack behavior hook at 0x"
-                << std::hex
-                << attackBehaviorTarget;
-
-            Logger::Info(
-                stream.str()
-            );
-        }
-
-        g_attackBehaviorHook =
-            safetyhook::create_inline(
-                reinterpret_cast<void*>(
-                    attackBehaviorTarget
-                    ),
-                reinterpret_cast<void*>(
-                    &AttackBehaviorHook
-                    )
-            );
-
-        Logger::Info(
-            "Attack behavior hook installed."
-        );
 
         {
             std::ostringstream stream;
@@ -469,7 +353,9 @@ namespace HJ::Hooks::FighterCommand
                 << std::hex
                 << target;
 
-            Logger::Info(stream.str());
+            Logger::Info(
+                stream.str()
+            );
         }
 
         g_checkEligibilityHook =
