@@ -7,32 +7,32 @@
 
 namespace HJ::Hooks
 {
-    bool Initialize()
-    {
-        Logger::Info("Initializing hooks...");
+	bool Initialize()
+	{
+		Logger::Info("Initializing hooks...");
 
-        if (!FighterCommand::Initialize())
-        {
-            Logger::Error(
-                "Failed to initialize FighterCommand hooks."
-            );
+		if (!FighterCommand::Initialize())
+		{
+			Logger::Error(
+				"Failed to initialize FighterCommand hooks."
+			);
 
-            return false;
-        }
+			return false;
+		}
 
-        if (!ActionRequest::Initialize())
-        {
-            Logger::Error(
-                "Failed to initialize ActionRequest hooks."
-            );
+		if (!ActionRequest::Initialize())
+		{
+			Logger::Error(
+				"Failed to initialize ActionRequest hooks."
+			);
 
-            return false;
-        }
+			return false;
+		}
 
-        Logger::Info(
-            "Hooks initialized successfully."
-        );
+		Logger::Info(
+			"Hooks initialized successfully."
+		);
 
-        return true;
-    }
+		return true;
+	}
 }

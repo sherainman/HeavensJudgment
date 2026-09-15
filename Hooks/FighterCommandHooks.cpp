@@ -5,11 +5,11 @@
 
 #include "../Combat/CombatSystem.hpp"
 #include "../Core/Logger.hpp"
+#include "../Engine/Engine.hpp"
 
 #include <Windows.h>
 #include <safetyhook.hpp>
 #include <Xinput.h>
-
 
 #include <cstdint>
 #include <intrin.h>
@@ -21,523 +21,553 @@
 
 namespace
 {
-    SafetyHookInline g_checkEligibilityHook{};
-    SafetyHookInline g_namedStateHook{};
-
-    std::atomic<bool> g_f6WasDown{ false };
-    std::atomic<ULONGLONG> g_traceUntil{ 0 };
-    std::atomic<ULONGLONG> g_traceStartedAt{ 0 };
-
-    constexpr ULONGLONG TraceDurationMs = 2000;
-
-    struct TraceEntry
-    {
-        std::uint32_t key;
-        std::uint32_t mode;
-        std::uint8_t option;
-        std::uintptr_t caller;
-        bool eligible;
-
-        bool operator==(const TraceEntry& other) const
-        {
-            return
-                key == other.key &&
-                mode == other.mode &&
-                option == other.option &&
-                caller == other.caller &&
-                eligible == other.eligible;
-        }
-    };
-
-    struct TraceEntryHash
-    {
-        std::size_t operator()(const TraceEntry& entry) const
-        {
-            std::size_t hash = entry.key;
-
-            hash ^= static_cast<std::size_t>(entry.mode) << 8;
-            hash ^= static_cast<std::size_t>(entry.option) << 16;
-            hash ^= entry.caller;
-            hash ^= static_cast<std::size_t>(entry.eligible) << 24;
-
-            return hash;
-        }
-    };
-
-    std::mutex g_traceMutex;
-
-    std::unordered_set<
-        TraceEntry,
-        TraceEntryHash
-    > g_traceEntries;
-
-    void UpdateTraceHotkey()
-    {
-        const bool f6Down =
-            (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
-
-        const bool wasDown =
-            g_f6WasDown.exchange(f6Down);
-
-        if (f6Down && !wasDown)
-        {
-            const ULONGLONG now =
-                GetTickCount64();
-
-            g_traceStartedAt.store(now);
-
-            g_traceUntil.store(
-                now + TraceDurationMs
-            );
-
-            HJ::Hooks::ActionRequest::EnableLightToHeavyTest();
-
-            {
-                std::scoped_lock lock(g_traceMutex);
-                g_traceEntries.clear();
-            }
-
-            HJ::Logger::Info(
-                "=== COMBAT TRACE STARTED: "
-                "2 second capture window ==="
-            );
-        }
-    }
-    void UpdateControllerCombatInput()
-    {
-        static bool previousRT = false;
-        static bool previousRB = false;
-        static bool previousLT = false;
-        static bool previousLB = false;
-
-        XINPUT_STATE state{};
-
-        if (XInputGetState(
-            0,
-            &state) != ERROR_SUCCESS)
-        {
-            previousRT = false;
-            previousRB = false;
-            previousLT = false;
-            previousLB = false;
-
-            return;
-        }
-
-        const bool currentRT =
-            state.Gamepad.bRightTrigger > 30;
-
-        const bool currentRB =
-            (state.Gamepad.wButtons &
-                XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
-
-        const bool currentLT =
-            state.Gamepad.bLeftTrigger > 30;
-
-        const bool currentLB =
-            (state.Gamepad.wButtons &
-                XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
-
-
-        // RT -> Boxer Light
-
-        if (currentRT && !previousRT)
-        {
-            HJ::Logger::Info(
-                "HJ INPUT: RT -> Boxer Light"
-            );
-
-            HJ::Hooks::ActionRequest::RequestAttack(
-                HJ::Combat::Commands::BoxerLightB
-            );
-        }
-
-
-        // RB -> Tiger Heavy
-
-        if (currentRB && !previousRB)
-        {
-            HJ::Logger::Info(
-                "HJ INPUT: RB -> Tiger Heavy"
-            );
-
-            HJ::Hooks::ActionRequest::RequestAttack(
-                HJ::Combat::Commands::TigerHeavy
-            );
-        }
-
-
-        // LT -> Boxer Heavy
-
-        if (currentLT && !previousLT)
-        {
-            HJ::Logger::Info(
-                "HJ INPUT: LT -> Boxer Heavy"
-            );
-
-            HJ::Hooks::ActionRequest::RequestAttack(
-                HJ::Combat::Commands::BoxerHeavy
-            );
-        }
-
-
-        // LB -> Crane EX Heavy
-
-        if (currentLB && !previousLB)
-        {
-            HJ::Logger::Info(
-                "HJ INPUT: LB -> Crane EX Heavy"
-            );
-
-            HJ::Hooks::ActionRequest::RequestAttack(
-                HJ::Combat::Commands::CraneExHeavy
-            );
-        }
-
-        previousRT = currentRT;
-        previousRB = currentRB;
-        previousLT = currentLT;
-        previousLB = currentLB;
-    }
-
-    void UpdateDirectAttackHotkey()
-    {
-        if ((GetAsyncKeyState(VK_F7) & 1) == 0)
-        {
-            return;
-        }
-
-        HJ::Hooks::ActionRequest::RequestAttack(
-            HJ::Combat::Commands::TigerHeavy
-        );
-    }
-
-    bool IsTraceActive()
-    {
-        const ULONGLONG until =
-            g_traceUntil.load();
-
-        if (until == 0)
-            return false;
-
-        const ULONGLONG now =
-            GetTickCount64();
-
-        if (now <= until)
-            return true;
-
-        ULONGLONG expected = until;
-
-        if (g_traceUntil.compare_exchange_strong(
-            expected,
-            0))
-        {
-            HJ::Logger::Info(
-                "=== COMBAT TRACE FINISHED ==="
-            );
-        }
-
-        return false;
-    }
-
-    DWORD WINAPI TraceHotkeyThread(LPVOID)
-    {
-        HJ::Logger::Info(
-            "Combat trace hotkey ready. Press F6 to capture."
-        );
-
-        while (true)
-        {
-            UpdateTraceHotkey();
-            UpdateDirectAttackHotkey();
-            UpdateControllerCombatInput();
-
-            IsTraceActive();
-
-            Sleep(10);
-        }
-
-        return 0;
-    }
-
-    void* __fastcall NamedStateHook(
-        std::uintptr_t stateContainer,
-        void* stateObject,
-        const char* stateName)
-    {
-        const auto caller =
-            reinterpret_cast<std::uintptr_t>(
-                _ReturnAddress()
-                );
-
-        if (IsTraceActive())
-        {
-            std::ostringstream stream;
-
-            stream
-                << "STATE TRACE"
-                << " name=\""
-                << (stateName ? stateName : "<null>")
-                << "\""
-                << " container=0x"
-                << std::hex
-                << stateContainer
-                << " object=0x"
-                << reinterpret_cast<std::uintptr_t>(
-                    stateObject
-                    )
-                << " caller=0x"
-                << caller;
-
-            HJ::Hooks::ActionRequest::TraceAttackObject(
-                stateContainer,
-                stateObject,
-                stateName,
-                caller
-            );
-
-            HJ::Logger::Info(
-                stream.str()
-            );
-        }
-
-        return g_namedStateHook.call<void*>(
-            stateContainer,
-            stateObject,
-            stateName
-        );
-    }
-
-    // addresses:
-    // ulonglong FUN_142E8F500(
-    //  ulonglong param_1,
-    //  uint      param_2, // fighter command key
-    //  uint      param_3, // style
-    //  uint      param_4  // option/behavior fl;ag?
-    // );
-    // 
-    // 
-    // style fightercommand key:
-    // snake = 0x40
-    // crane = 0x41
-    // tiger = 0x42
-    // boxer = 0x73
-    // 
-    // stores at:
-    // DAT_14430BE48 + 0xE8 
-    // 
-    // windosx x64 
-    // rcx = context
-    // edx = key
-    // r8d = mode
-    // r9b = option
-    //
-    std::uint64_t __fastcall CheckEligibilityHook(
-        std::uint64_t context,
-        std::uint32_t key,
-        std::uint32_t mode,
-        std::uint8_t option)
-    {
-        const bool traceActive =
-            IsTraceActive();
-
-        const auto caller =
-            reinterpret_cast<std::uintptr_t>(
-                _ReturnAddress()
-                );
-
-        // run the og de function first so it can record its eligibility result
-        const std::uint64_t result =
-            g_checkEligibilityHook.call<std::uint64_t>(
-                context,
-                key,
-                mode,
-                option
-            );
-
-
-        const bool eligible =
-            (result & 0xFF) != 0;
-
-
-        // function casn execute OOOFFFTEEENNNN only log when something about the check changes on this thread
-
-        if (traceActive)
-        {
-            const TraceEntry entry{
-                key,
-                mode,
-                option,
-                caller,
-                eligible
-            };
-
-            bool firstOccurrence = false;
-
-            {
-                std::scoped_lock lock(g_traceMutex);
-
-                firstOccurrence =
-                    g_traceEntries.insert(entry).second;
-            }
-
-            if (firstOccurrence)
-            {
-                const ULONGLONG now =
-                    GetTickCount64();
-
-                const ULONGLONG elapsed =
-                    now - g_traceStartedAt.load();
-
-                std::ostringstream stream;
-
-                stream
-                    << "TRACE +"
-                    << std::dec
-                    << elapsed
-                    << "ms"
-                    << " thread="
-                    << GetCurrentThreadId()
-                    << " context=0x"
-                    << std::hex
-                    << context
-                    << " key=0x"
-                    << key
-                    << " mode=0x"
-                    << mode
-                    << " option=0x"
-                    << static_cast<unsigned int>(option)
-                    << " caller=0x"
-                    << caller
-                    << " result="
-                    << (eligible ? "true" : "false");
-
-                HJ::Logger::Info(
-                    stream.str()
-                );
-            }
-        }
-
-        return result;
-    }
+	SafetyHookInline g_checkEligibilityHook{};
+	SafetyHookInline g_namedStateHook{};
+
+	std::atomic<bool> g_f6WasDown{ false };
+	std::atomic<ULONGLONG> g_traceUntil{ 0 };
+	std::atomic<ULONGLONG> g_traceStartedAt{ 0 };
+
+	constexpr ULONGLONG TraceDurationMs = 2000;
+
+	struct TraceEntry
+	{
+		std::uint32_t key;
+		std::uint32_t mode;
+		std::uint8_t option;
+		std::uintptr_t caller;
+		bool eligible;
+
+		bool operator==(const TraceEntry& other) const
+		{
+			return
+				key == other.key &&
+				mode == other.mode &&
+				option == other.option &&
+				caller == other.caller &&
+				eligible == other.eligible;
+		}
+	};
+
+	struct TraceEntryHash
+	{
+		std::size_t operator()(const TraceEntry& entry) const
+		{
+			std::size_t hash = entry.key;
+
+			hash ^= static_cast<std::size_t>(entry.mode) << 8;
+			hash ^= static_cast<std::size_t>(entry.option) << 16;
+			hash ^= entry.caller;
+			hash ^= static_cast<std::size_t>(entry.eligible) << 24;
+
+			return hash;
+		}
+	};
+
+	std::mutex g_traceMutex;
+
+	std::unordered_set<
+		TraceEntry,
+		TraceEntryHash
+	> g_traceEntries;
+
+	void UpdateTraceHotkey()
+	{
+		const bool f6Down =
+			(GetAsyncKeyState(VK_F6) & 0x8000) != 0;
+
+		const bool wasDown =
+			g_f6WasDown.exchange(f6Down);
+
+		if (f6Down && !wasDown)
+		{
+			const ULONGLONG now =
+				GetTickCount64();
+
+			g_traceStartedAt.store(now);
+
+			g_traceUntil.store(
+				now + TraceDurationMs
+			);
+
+			HJ::Hooks::ActionRequest::EnableLightToHeavyTest();
+
+			{
+				std::scoped_lock lock(g_traceMutex);
+				g_traceEntries.clear();
+			}
+
+			HJ::Logger::Info(
+				"=== COMBAT TRACE STARTED: "
+				"2 second capture window ==="
+			);
+		}
+	}
+
+	void UpdateEngineFightingDiagnostic()
+	{
+		static bool initialized = false;
+		static bool previousFighting = false;
+
+		bool fighting = false;
+
+		if (!HJ::Engine::TryGetFightingState(fighting))
+			return;
+
+		if (!initialized)
+		{
+			initialized = true;
+			previousFighting = fighting;
+
+			HJ::Logger::Info(
+				fighting
+				? "HJ ENGINE FIGHTING initial: true"
+				: "HJ ENGINE FIGHTING initial: false");
+
+			return;
+		}
+
+		if (fighting == previousFighting)
+			return;
+
+		HJ::Logger::Info(
+			fighting
+			? "HJ ENGINE FIGHTING: false -> true"
+			: "HJ ENGINE FIGHTING: true -> false");
+
+		previousFighting = fighting;
+	}
+
+	void UpdateControllerCombatInput()
+	{
+		static bool previousRT = false;
+		static bool previousRB = false;
+		static bool previousLT = false;
+		static bool previousLB = false;
+
+		XINPUT_STATE state{};
+
+		if (XInputGetState(
+			0,
+			&state) != ERROR_SUCCESS)
+		{
+			previousRT = false;
+			previousRB = false;
+			previousLT = false;
+			previousLB = false;
+
+			return;
+		}
+
+		const bool currentRT =
+			state.Gamepad.bRightTrigger > 30;
+
+		const bool currentRB =
+			(state.Gamepad.wButtons &
+				XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
+
+		const bool currentLT =
+			state.Gamepad.bLeftTrigger > 30;
+
+		const bool currentLB =
+			(state.Gamepad.wButtons &
+				XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
+
+		// RT -> Boxer Light
+
+		if (currentRT && !previousRT)
+		{
+			HJ::Logger::Info(
+				"HJ INPUT: RT -> Boxer Light"
+			);
+
+			HJ::Hooks::ActionRequest::RequestAttack(
+				HJ::Combat::Commands::BoxerLightB
+			);
+		}
+
+		// RB -> Tiger Heavy
+
+		if (currentRB && !previousRB)
+		{
+			HJ::Logger::Info(
+				"HJ INPUT: RB -> Tiger Heavy"
+			);
+
+			HJ::Hooks::ActionRequest::RequestAttack(
+				HJ::Combat::Commands::TigerHeavy
+			);
+		}
+
+		// LT -> Boxer Heavy
+
+		if (currentLT && !previousLT)
+		{
+			HJ::Logger::Info(
+				"HJ INPUT: LT -> Boxer Heavy"
+			);
+
+			HJ::Hooks::ActionRequest::RequestAttack(
+				HJ::Combat::Commands::BoxerHeavy
+			);
+		}
+
+		// LB -> Crane EX Grab
+
+		if (currentLB && !previousLB)
+		{
+			HJ::Logger::Info(
+				"HJ INPUT: LB -> Crane EX Grab"
+			);
+
+			HJ::Hooks::ActionRequest::RequestAttack(
+				HJ::Combat::Commands::CraneExGrab
+			);
+		}
+
+		previousRT = currentRT;
+		previousRB = currentRB;
+		previousLT = currentLT;
+		previousLB = currentLB;
+	}
+
+	void UpdateDirectAttackHotkey()
+	{
+		if ((GetAsyncKeyState(VK_F7) & 1) == 0)
+		{
+			return;
+		}
+
+		HJ::Hooks::ActionRequest::RequestAttack(
+			HJ::Combat::Commands::TigerHeavy
+		);
+	}
+
+	bool IsTraceActive()
+	{
+		const ULONGLONG until =
+			g_traceUntil.load();
+
+		if (until == 0)
+			return false;
+
+		const ULONGLONG now =
+			GetTickCount64();
+
+		if (now <= until)
+			return true;
+
+		ULONGLONG expected = until;
+
+		if (g_traceUntil.compare_exchange_strong(
+			expected,
+			0))
+		{
+			HJ::Logger::Info(
+				"=== COMBAT TRACE FINISHED ==="
+			);
+		}
+
+		return false;
+	}
+
+	DWORD WINAPI TraceHotkeyThread(LPVOID)
+	{
+		HJ::Logger::Info(
+			"Combat trace hotkey ready. Press F6 to capture."
+		);
+
+		while (true)
+		{
+			UpdateTraceHotkey();
+			UpdateDirectAttackHotkey();
+			UpdateControllerCombatInput();
+
+			UpdateEngineFightingDiagnostic();
+
+			IsTraceActive();
+			Sleep(10);
+		}
+
+		return 0;
+	}
+
+	void* __fastcall NamedStateHook(
+		std::uintptr_t stateContainer,
+		void* stateObject,
+		const char* stateName)
+	{
+		const auto caller =
+			reinterpret_cast<std::uintptr_t>(
+				_ReturnAddress()
+				);
+
+		if (IsTraceActive())
+		{
+			std::ostringstream stream;
+
+			stream
+				<< "STATE TRACE"
+				<< " name=\""
+				<< (stateName ? stateName : "<null>")
+				<< "\""
+				<< " container=0x"
+				<< std::hex
+				<< stateContainer
+				<< " object=0x"
+				<< reinterpret_cast<std::uintptr_t>(
+					stateObject
+					)
+				<< " caller=0x"
+				<< caller;
+
+			HJ::Hooks::ActionRequest::TraceAttackObject(
+				stateContainer,
+				stateObject,
+				stateName,
+				caller
+			);
+
+			HJ::Logger::Info(
+				stream.str()
+			);
+		}
+
+		return g_namedStateHook.call<void*>(
+			stateContainer,
+			stateObject,
+			stateName
+		);
+	}
+
+	// addresses:
+	// ulonglong FUN_142E8F500(
+	//  ulonglong param_1,
+	//  uint      param_2, // fighter command key
+	//  uint      param_3, // style
+	//  uint      param_4  // option/behavior fl;ag?
+	// );
+	//
+	//
+	// style fightercommand key:
+	// snake = 0x40
+	// crane = 0x41
+	// tiger = 0x42
+	// boxer = 0x73
+	//
+	// stores at:
+	// DAT_14430BE48 + 0xE8
+	//
+	// windosx x64
+	// rcx = context
+	// edx = key
+	// r8d = mode
+	// r9b = option
+	//
+	std::uint64_t __fastcall CheckEligibilityHook(
+		std::uint64_t context,
+		std::uint32_t key,
+		std::uint32_t mode,
+		std::uint8_t option)
+	{
+		const bool traceActive =
+			IsTraceActive();
+
+		const auto caller =
+			reinterpret_cast<std::uintptr_t>(
+				_ReturnAddress()
+				);
+
+		// run the og de function first so it can record its eligibility result
+		const std::uint64_t result =
+			g_checkEligibilityHook.call<std::uint64_t>(
+				context,
+				key,
+				mode,
+				option
+			);
+
+		const bool eligible =
+			(result & 0xFF) != 0;
+
+		// function casn execute OOOFFFTEEENNNN only log when something about the check changes on this thread
+
+		if (traceActive)
+		{
+			const TraceEntry entry{
+				key,
+				mode,
+				option,
+				caller,
+				eligible
+			};
+
+			bool firstOccurrence = false;
+
+			{
+				std::scoped_lock lock(g_traceMutex);
+
+				firstOccurrence =
+					g_traceEntries.insert(entry).second;
+			}
+
+			if (firstOccurrence)
+			{
+				const ULONGLONG now =
+					GetTickCount64();
+
+				const ULONGLONG elapsed =
+					now - g_traceStartedAt.load();
+
+				std::ostringstream stream;
+
+				stream
+					<< "TRACE +"
+					<< std::dec
+					<< elapsed
+					<< "ms"
+					<< " thread="
+					<< GetCurrentThreadId()
+					<< " context=0x"
+					<< std::hex
+					<< context
+					<< " key=0x"
+					<< key
+					<< " mode=0x"
+					<< mode
+					<< " option=0x"
+					<< static_cast<unsigned int>(option)
+					<< " caller=0x"
+					<< caller
+					<< " result="
+					<< (eligible ? "true" : "false");
+
+				HJ::Logger::Info(
+					stream.str()
+				);
+			}
+		}
+
+		return result;
+	}
 }
 
 namespace HJ::Hooks::FighterCommand
 {
-    bool Initialize()
-    {
-        const HMODULE gameModule =
-            GetModuleHandleA(nullptr);
+	bool Initialize()
+	{
+		const HMODULE gameModule =
+			GetModuleHandleA(nullptr);
 
-        if (!gameModule)
-        {
-            Logger::Error(
-                "FighterCommand hook: failed to get game module."
-            );
+		if (!gameModule)
+		{
+			Logger::Error(
+				"FighterCommand hook: failed to get game module."
+			);
 
-            return false;
-        }
+			return false;
+		}
 
-        const auto base =
-            reinterpret_cast<std::uintptr_t>(
-                gameModule
-                );
+		const auto base =
+			reinterpret_cast<std::uintptr_t>(
+				gameModule
+				);
 
-        //
-        // TEMPORARY hardcoded rva
-        // 0x142E8F500 - 0x140000000
-        // = 0x02E8F500
-        //
-        constexpr std::uintptr_t CheckEligibilityRva =
-            0x02E8F500;
+		//
+		// TEMPORARY hardcoded rva
+		// 0x142E8F500 - 0x140000000
+		// = 0x02E8F500
+		//
+		constexpr std::uintptr_t CheckEligibilityRva =
+			0x02E8F500;
 
-        //
-        // FUN_1403B43D0
-        // 0x1403B43D0 - 0x140000000
-        // = 0x003B43D0
-        //
-        constexpr std::uintptr_t NamedStateRva =
-            0x003B43D0;
+		//
+		// FUN_1403B43D0
+		// 0x1403B43D0 - 0x140000000
+		// = 0x003B43D0
+		//
+		constexpr std::uintptr_t NamedStateRva =
+			0x003B43D0;
 
-        const auto target =
-            base + CheckEligibilityRva;
+		const auto target =
+			base + CheckEligibilityRva;
 
-        const auto namedStateTarget =
-            base + NamedStateRva;
+		const auto namedStateTarget =
+			base + NamedStateRva;
 
-        {
-            std::ostringstream stream;
+		{
+			std::ostringstream stream;
 
-            stream
-                << "Installing FighterCommand eligibility hook at 0x"
-                << std::hex
-                << target;
+			stream
+				<< "Installing FighterCommand eligibility hook at 0x"
+				<< std::hex
+				<< target;
 
-            Logger::Info(
-                stream.str()
-            );
-        }
+			Logger::Info(
+				stream.str()
+			);
+		}
 
-        g_checkEligibilityHook =
-            safetyhook::create_inline(
-                reinterpret_cast<void*>(target),
-                reinterpret_cast<void*>(
-                    &CheckEligibilityHook
-                    )
-            );
+		g_checkEligibilityHook =
+			safetyhook::create_inline(
+				reinterpret_cast<void*>(target),
+				reinterpret_cast<void*>(
+					&CheckEligibilityHook
+					)
+			);
 
-        Logger::Info(
-            "FighterCommand eligibility hook installed."
-        );
+		Logger::Info(
+			"FighterCommand eligibility hook installed."
+		);
 
-        {
-            std::ostringstream stream;
+		{
+			std::ostringstream stream;
 
-            stream
-                << "Installing named state hook at 0x"
-                << std::hex
-                << namedStateTarget;
+			stream
+				<< "Installing named state hook at 0x"
+				<< std::hex
+				<< namedStateTarget;
 
-            Logger::Info(
-                stream.str()
-            );
-        }
+			Logger::Info(
+				stream.str()
+			);
+		}
 
-        g_namedStateHook =
-            safetyhook::create_inline(
-                reinterpret_cast<void*>(
-                    namedStateTarget
-                    ),
-                reinterpret_cast<void*>(
-                    &NamedStateHook
-                    )
-            );
+		g_namedStateHook =
+			safetyhook::create_inline(
+				reinterpret_cast<void*>(
+					namedStateTarget
+					),
+				reinterpret_cast<void*>(
+					&NamedStateHook
+					)
+			);
 
-        Logger::Info(
-            "Named state hook installed."
-        );
+		Logger::Info(
+			"Named state hook installed."
+		);
 
-        HANDLE traceThread =
-            CreateThread(
-                nullptr,
-                0,
-                &TraceHotkeyThread,
-                nullptr,
-                0,
-                nullptr
-            );
+		HANDLE traceThread =
+			CreateThread(
+				nullptr,
+				0,
+				&TraceHotkeyThread,
+				nullptr,
+				0,
+				nullptr
+			);
 
-        if (!traceThread)
-        {
-            Logger::Error(
-                "Failed to create combat trace hotkey thread."
-            );
+		if (!traceThread)
+		{
+			Logger::Error(
+				"Failed to create combat trace hotkey thread."
+			);
 
-            return false;
-        }
+			return false;
+		}
 
-        CloseHandle(traceThread);
+		CloseHandle(traceThread);
 
-        return true;
-    }
+		return true;
+	}
 }

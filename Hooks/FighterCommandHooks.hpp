@@ -2,5 +2,5 @@
 
 namespace HJ::Hooks::FighterCommand
 {
-    bool Initialize();
+	bool Initialize();
 }
