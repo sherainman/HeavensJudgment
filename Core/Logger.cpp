@@ -24,9 +24,7 @@ namespace
 			<< '\n';
 
 		g_logFile.flush();
-
 	}
-
 }
 
 namespace HJ::Logger
@@ -44,7 +42,6 @@ namespace HJ::Logger
 			&module))
 		{
 			return false;
-
 		}
 
 		if (!GetModuleFileNameA(
@@ -77,8 +74,7 @@ namespace HJ::Logger
 
 		return true;
 	}
-	
-	
+
 	void Info(const std::string& message)
 	{
 		Write("INFO", message);

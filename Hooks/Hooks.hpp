@@ -2,5 +2,5 @@
 
 namespace HJ::Hooks
 {
-    bool Initialize();
+	bool Initialize();
 }

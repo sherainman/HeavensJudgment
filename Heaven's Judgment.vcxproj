@@ -73,16 +73,20 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <TargetName>HeavensJudgment</TargetName>
     <TargetExt>.asi</TargetExt>
+    <OutDir>A:\SteamLibrary\steamapps\common\Lost Judgment\runtime\media\mods\HeavensJudgment</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <TargetName>HeavensJudgment</TargetName>
     <TargetExt>.asi</TargetExt>
+    <OutDir>A:\SteamLibrary\steamapps\common\Lost Judgment\runtime\media\mods\HeavensJudgment</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <TargetExt>.asi</TargetExt>
+    <OutDir>A:\SteamLibrary\steamapps\common\Lost Judgment\runtime\media\mods\HeavensJudgment</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <TargetExt>.asi</TargetExt>
+    <OutDir>A:\SteamLibrary\steamapps\common\Lost Judgment\runtime\media\mods\HeavensJudgment</OutDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -169,20 +173,24 @@
   <ItemGroup>
     <ClInclude Include="Combat\CombatSystem.hpp" />
     <ClInclude Include="Core\Logger.hpp" />
+    <ClInclude Include="Core\PatternScanner.hpp" />
     <ClInclude Include="Engine\Engine.hpp" />
     <ClInclude Include="HeavensJudgment.hpp" />
     <ClInclude Include="external\safetyhook\safetyhook.hpp" />
     <ClInclude Include="external\safetyhook\Zydis.h" />
+    <ClInclude Include="Hooks\FighterCommandHooks.hpp" />
     <ClInclude Include="Hooks\Hooks.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Combat\CombatSystem.cpp" />
     <ClCompile Include="Core\Logger.cpp" />
+    <ClCompile Include="Core\PatternScanner.cpp" />
     <ClCompile Include="Engine\Engine.cpp" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="HeavensJudgment.cpp" />
     <ClCompile Include="external\safetyhook\safetyhook.cpp" />
     <ClCompile Include="external\safetyhook\Zydis.c" />
+    <ClCompile Include="Hooks\FighterCommandHooks.cpp" />
     <ClCompile Include="Hooks\Hooks.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
