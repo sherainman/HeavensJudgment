@@ -1,3 +1,5 @@
+#pragma comment(lib, "Xinput.lib")
+
 #include "FighterCommandHooks.hpp"
 #include "ActionRequestsHooks.hpp"
 
@@ -6,6 +8,8 @@
 
 #include <Windows.h>
 #include <safetyhook.hpp>
+#include <Xinput.h>
+
 
 #include <cstdint>
 #include <intrin.h>
@@ -99,6 +103,102 @@ namespace
             );
         }
     }
+    void UpdateControllerCombatInput()
+    {
+        static bool previousRT = false;
+        static bool previousRB = false;
+        static bool previousLT = false;
+        static bool previousLB = false;
+
+        XINPUT_STATE state{};
+
+        if (XInputGetState(
+            0,
+            &state) != ERROR_SUCCESS)
+        {
+            previousRT = false;
+            previousRB = false;
+            previousLT = false;
+            previousLB = false;
+
+            return;
+        }
+
+        const bool currentRT =
+            state.Gamepad.bRightTrigger > 30;
+
+        const bool currentRB =
+            (state.Gamepad.wButtons &
+                XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
+
+        const bool currentLT =
+            state.Gamepad.bLeftTrigger > 30;
+
+        const bool currentLB =
+            (state.Gamepad.wButtons &
+                XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
+
+
+        // RT -> Boxer Light
+
+        if (currentRT && !previousRT)
+        {
+            HJ::Logger::Info(
+                "HJ INPUT: RT -> Boxer Light"
+            );
+
+            HJ::Hooks::ActionRequest::RequestAttack(
+                HJ::Combat::Commands::BoxerLightB
+            );
+        }
+
+
+        // RB -> Tiger Heavy
+
+        if (currentRB && !previousRB)
+        {
+            HJ::Logger::Info(
+                "HJ INPUT: RB -> Tiger Heavy"
+            );
+
+            HJ::Hooks::ActionRequest::RequestAttack(
+                HJ::Combat::Commands::TigerHeavy
+            );
+        }
+
+
+        // LT -> Boxer Heavy
+
+        if (currentLT && !previousLT)
+        {
+            HJ::Logger::Info(
+                "HJ INPUT: LT -> Boxer Heavy"
+            );
+
+            HJ::Hooks::ActionRequest::RequestAttack(
+                HJ::Combat::Commands::BoxerHeavy
+            );
+        }
+
+
+        // LB -> Crane EX Heavy
+
+        if (currentLB && !previousLB)
+        {
+            HJ::Logger::Info(
+                "HJ INPUT: LB -> Crane EX Heavy"
+            );
+
+            HJ::Hooks::ActionRequest::RequestAttack(
+                HJ::Combat::Commands::CraneExHeavy
+            );
+        }
+
+        previousRT = currentRT;
+        previousRB = currentRB;
+        previousLT = currentLT;
+        previousLB = currentLB;
+    }
 
     void UpdateDirectAttackHotkey()
     {
@@ -150,6 +250,7 @@ namespace
         {
             UpdateTraceHotkey();
             UpdateDirectAttackHotkey();
+            UpdateControllerCombatInput();
 
             IsTraceActive();
 
