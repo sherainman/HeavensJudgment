@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "InputBuffer.hpp"
+
 namespace HJ::Combat
 {
 	enum class Style : std::uint16_t
@@ -72,6 +74,11 @@ namespace HJ::Combat
 	bool TryGetHeavyReplacement(
 		std::uint32_t packedCommand,
 		std::uint32_t& replacement
+	);
+
+	bool TryResolveInput(
+		InputBuffer::Input input,
+		std::uint32_t& packedCommand
 	);
 
 	bool IsInCombat();

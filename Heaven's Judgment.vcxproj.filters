@@ -45,6 +45,9 @@
     <ClInclude Include="Hooks\ActionRequestsHooks.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="Combat\InputBuffer.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="external\safetyhook\safetyhook.cpp">
@@ -78,6 +81,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Hooks\ActionRequestHooks.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Combat\InputBuffer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

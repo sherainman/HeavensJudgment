@@ -78,6 +78,41 @@ namespace HJ::Combat
 		}
 	}
 
+	bool TryResolveInput(
+		InputBuffer::Input input,
+		std::uint32_t& packedCommand)
+	{
+		switch (input)
+		{
+		case InputBuffer::Input::RightTrigger:
+			packedCommand =
+				Commands::BoxerLightB;
+
+			return true;
+
+		case InputBuffer::Input::RightBumper:
+			packedCommand =
+				Commands::TigerHeavy;
+
+			return true;
+
+		case InputBuffer::Input::LeftTrigger:
+			packedCommand =
+				Commands::BoxerHeavy;
+
+			return true;
+
+		case InputBuffer::Input::LeftBumper:
+			packedCommand =
+				Commands::CraneExGrab;
+
+			return true;
+
+		default:
+			return false;
+		}
+	}
+
 	bool IsInCombat()
 	{
 		bool fighting = false;

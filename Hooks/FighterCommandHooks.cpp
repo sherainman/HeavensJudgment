@@ -6,6 +6,7 @@
 #include "../Combat/CombatSystem.hpp"
 #include "../Core/Logger.hpp"
 #include "../Engine/Engine.hpp"
+#include "../Combat/InputBuffer.hpp"
 
 #include <Windows.h>
 #include <safetyhook.hpp>
@@ -181,8 +182,8 @@ namespace
 				"HJ INPUT: RT -> Boxer Light"
 			);
 
-			HJ::Hooks::ActionRequest::RequestAttack(
-				HJ::Combat::Commands::BoxerLightB
+			HJ::Combat::InputBuffer::Push(
+				HJ::Combat::InputBuffer::Input::RightTrigger
 			);
 		}
 
@@ -194,8 +195,8 @@ namespace
 				"HJ INPUT: RB -> Tiger Heavy"
 			);
 
-			HJ::Hooks::ActionRequest::RequestAttack(
-				HJ::Combat::Commands::TigerHeavy
+			HJ::Combat::InputBuffer::Push(
+				HJ::Combat::InputBuffer::Input::RightBumper
 			);
 		}
 
@@ -207,8 +208,8 @@ namespace
 				"HJ INPUT: LT -> Boxer Heavy"
 			);
 
-			HJ::Hooks::ActionRequest::RequestAttack(
-				HJ::Combat::Commands::BoxerHeavy
+			HJ::Combat::InputBuffer::Push(
+				HJ::Combat::InputBuffer::Input::LeftTrigger
 			);
 		}
 
@@ -220,8 +221,8 @@ namespace
 				"HJ INPUT: LB -> Crane EX Grab"
 			);
 
-			HJ::Hooks::ActionRequest::RequestAttack(
-				HJ::Combat::Commands::CraneExGrab
+			HJ::Combat::InputBuffer::Push(
+				HJ::Combat::InputBuffer::Input::LeftBumper
 			);
 		}
 
@@ -229,6 +230,25 @@ namespace
 		previousRB = currentRB;
 		previousLT = currentLT;
 		previousLB = currentLB;
+	}
+
+	void UpdateDirectEvadeHotkey()
+	{
+		static bool wasF8Down = false;
+
+		const bool isF8Down =
+			(GetAsyncKeyState(VK_F8) & 0x8000) != 0;
+
+		if (isF8Down && !wasF8Down)
+		{
+			HJ::Logger::Info(
+				"HJ INPUT: F8 direct evade"
+			);
+
+			HJ::Hooks::ActionRequest::RequestEvade();
+		}
+
+		wasF8Down = isF8Down;
 	}
 
 	void UpdateDirectAttackHotkey()
@@ -281,6 +301,7 @@ namespace
 		{
 			UpdateTraceHotkey();
 			UpdateDirectAttackHotkey();
+			UpdateDirectEvadeHotkey();
 			UpdateControllerCombatInput();
 
 			UpdateEngineFightingDiagnostic();

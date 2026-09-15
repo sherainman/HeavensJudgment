@@ -43,6 +43,8 @@ namespace HJ::Hooks::ActionRequest
 
 	void EnableLightToHeavyTest();
 
+	bool RequestEvade();
+
 	bool RequestAttack(
 		std::uint32_t packedCommand
 	);

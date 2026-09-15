@@ -176,6 +176,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="Combat\CombatSystem.hpp" />
+    <ClInclude Include="Combat\InputBuffer.hpp" />
     <ClInclude Include="Core\Logger.hpp" />
     <ClInclude Include="Core\PatternScanner.hpp" />
     <ClInclude Include="Engine\Engine.hpp" />
@@ -188,6 +189,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Combat\CombatSystem.cpp" />
+    <ClCompile Include="Combat\InputBuffer.cpp" />
     <ClCompile Include="Core\Logger.cpp" />
     <ClCompile Include="Core\PatternScanner.cpp" />
     <ClCompile Include="Engine\Engine.cpp" />

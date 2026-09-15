@@ -1,5 +1,6 @@
 #include "ActionRequestsHooks.hpp"
 #include "../Combat/CombatSystem.hpp"
+#include "../Combat/InputBuffer.hpp"
 
 #include "../Core/Logger.hpp"
 
@@ -11,6 +12,7 @@
 #include <cstring>
 #include <intrin.h>
 #include <sstream>
+#include <format>
 
 namespace
 {
@@ -23,6 +25,8 @@ namespace
 
 	std::atomic<std::uint32_t>
 		g_pendingAttack{ 0 };
+
+	std::atomic<bool> g_pendingEvade{ false };
 
 	std::atomic<bool> g_lightToHeavyTest{ false };
 
@@ -163,12 +167,68 @@ namespace
 			return result;
 		}
 
-		const std::uint32_t pendingAttack =
+		if (g_pendingEvade.exchange(false))
+		{
+			using HandleSwayRequestFn =
+				void(__fastcall*)(std::uintptr_t);
+
+			constexpr std::uintptr_t kHandleSwayRequestRva =
+				0x02F1ED80;
+
+			const auto moduleBase =
+				reinterpret_cast<std::uintptr_t>(
+					GetModuleHandleW(nullptr)
+					);
+
+			const auto handleSwayRequest =
+				reinterpret_cast<HandleSwayRequestFn>(
+					moduleBase + kHandleSwayRequestRva
+					);
+
+			HJ::Logger::Info(
+				std::format(
+					"HJ DIRECT EVADE object=0x{:X}",
+					static_cast<unsigned long long>(
+						combatObject
+						)
+				)
+			);
+
+			handleSwayRequest(combatObject);
+
+			return result;
+		}
+
+		std::uint32_t pendingAttack =
 			g_pendingAttack.exchange(0);
+
+		if (!HJ::Combat::IsInCombat())
+		{
+			HJ::Combat::InputBuffer::Clear();
+
+			return result;
+		}
+
+		//
+		// f7 has priority,
+		// otherwise consume oldest player input from the combat buffer
 
 		if (pendingAttack == 0)
 		{
-			return result;
+			HJ::Combat::InputBuffer::Entry input{};
+
+			if (!HJ::Combat::InputBuffer::TryConsume(
+				input))
+			{
+				return result;
+			}
+
+			if (!HJ::Combat::TryResolveInput(
+				input.input,
+				pendingAttack))
+			{
+				return result;
+			}
 		}
 
 		//
@@ -375,6 +435,35 @@ namespace HJ::Hooks::ActionRequest
 
 		Logger::Info(
 			"Player combat update hook installed."
+		);
+
+		return true;
+	}
+
+	bool RequestEvade()
+	{
+		if (!HJ::Combat::IsInCombat())
+		{
+			HJ::Logger::Warning(
+				"Cannot request evade: player is not in combat."
+			);
+
+			return false;
+		}
+
+		if (g_playerCombatObject.load() == 0)
+		{
+			HJ::Logger::Warning(
+				"Cannot request evade: player combat object is not captured."
+			);
+
+			return false;
+		}
+
+		g_pendingEvade.store(true);
+
+		HJ::Logger::Info(
+			"HJ EVADE QUEUED"
 		);
 
 		return true;
