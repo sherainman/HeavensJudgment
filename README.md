@@ -11,10 +11,15 @@ Insanely EARLY development.
 
 ## Currently implemented
 
-- x64 ASI/DLL bootstrap
-- runtime logging
-- safetyhook integration
-- initial project architecture
+- Native ASI runtime for Lost Judgment, with SRMM
+- Runtime combat command interception
+- Direct game-thread attack invocation
+- Custom controller attack mapping
+- Cross-style attack execution without modifying any animation files (will probably create a moveset in the future just for combo/accuracy's sake)
+- Support for Snake, Crane, Tiger and Boxer combat commands
+- Basic combat tracing/debug logging
+- Runtime state tracing for attacks and combat states
+- Uses DE's existing animation/damage/combat Fighter_Command.cfc as the backend 
 
 ## Planned architecture
 
