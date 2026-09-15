@@ -1,0 +1,37 @@
+# Heaven's Judgment
+
+This project is intended to be a experimental comabt framework for Lost Judgment.
+Long-term goal is to replace and extend Lost Judgment's combat logic with a custom combat system inspired by the presentation and mechanics from Stranger Than Heaven.
+
+The closeness of how this will actually end up to STH's combat is unknown since I'm pretty much basing this off of my own visual tracking of the combat and assumptions of how it may feel.
+
+## Current Status
+
+Insanely EARLY development.
+
+## Currently implemented
+
+- x64 ASI/DLL bootstrap
+- runtime logging
+- safetyhook integration
+- initial project architecture
+
+## Planned architecture
+
+- 'Core/' - logging, memory utils, pattern scanning
+- 'Engine/' - DE interface
+- 'Hooks/' - runtime hooks
+- 'Combat/' - the custom combat system
+- 'external/ - safetyhook / any third-party dependencies 
+
+## Requirements
+
+- Visual Studio 2022
+- x64 build target
+- C++23
+- Lost Judgment
+- SRMM / an ASI loader
+
+## Disclaimer
+
+Not associated with or endorsed by SEGA or RGG Studio. Unofficial modding and reverse engineering project.
