@@ -8,10 +8,214 @@
 #include <cstdint>
 #include <intrin.h>
 #include <sstream>
+#include <atomic>
+#include <cstring>
+
+#include <mutex>
+#include <unordered_set>
 
 namespace
 {
     SafetyHookInline g_checkEligibilityHook{};
+    SafetyHookInline g_namedStateHook{};
+    SafetyHookInline g_attackBehaviorHook{};
+
+    std::atomic<bool> g_f6WasDown{ false };
+    std::atomic<ULONGLONG> g_traceUntil{ 0 };
+    std::atomic<ULONGLONG> g_traceStartedAt{ 0 };
+    std::atomic<bool> g_attackOverrideUsed{ false };
+
+    constexpr ULONGLONG TraceDurationMs = 2000;
+
+    struct TraceEntry
+    {
+        std::uint32_t key;
+        std::uint32_t mode;
+        std::uint8_t option;
+        std::uintptr_t caller;
+        bool eligible;
+
+        bool operator==(const TraceEntry& other) const
+        {
+            return
+                key == other.key &&
+                mode == other.mode &&
+                option == other.option &&
+                caller == other.caller &&
+                eligible == other.eligible;
+        }
+    };
+
+    struct TraceEntryHash
+    {
+        std::size_t operator()(const TraceEntry& entry) const
+        {
+            std::size_t hash = entry.key;
+
+            hash ^= static_cast<std::size_t>(entry.mode) << 8;
+            hash ^= static_cast<std::size_t>(entry.option) << 16;
+            hash ^= entry.caller;
+            hash ^= static_cast<std::size_t>(entry.eligible) << 24;
+
+            return hash;
+        }
+    };
+
+    std::mutex g_traceMutex;
+
+    std::unordered_set<
+        TraceEntry,
+        TraceEntryHash
+    > g_traceEntries;
+
+    void UpdateTraceHotkey()
+    {
+        const bool f6Down =
+            (GetAsyncKeyState(VK_F6) & 0x8000) != 0;
+
+        const bool wasDown =
+            g_f6WasDown.exchange(f6Down);
+
+        if (f6Down && !wasDown)
+        {
+            const ULONGLONG now =
+                GetTickCount64();
+
+            g_traceStartedAt.store(now);
+
+            g_traceUntil.store(
+                now + TraceDurationMs
+            );
+
+            g_attackOverrideUsed.store(false);
+
+            {
+                std::scoped_lock lock(g_traceMutex);
+                g_traceEntries.clear();
+            }
+
+            HJ::Logger::Info(
+                "=== COMBAT TRACE STARTED: "
+                "2 second capture window ==="
+            );
+        }
+    }
+
+    bool IsTraceActive()
+    {
+        const ULONGLONG until =
+            g_traceUntil.load();
+
+        if (until == 0)
+            return false;
+
+        const ULONGLONG now =
+            GetTickCount64();
+
+        if (now <= until)
+            return true;
+
+        ULONGLONG expected = until;
+
+        if (g_traceUntil.compare_exchange_strong(
+            expected,
+            0))
+        {
+            HJ::Logger::Info(
+                "=== COMBAT TRACE FINISHED ==="
+            );
+        }
+
+        return false;
+    }
+
+    void __fastcall AttackBehaviorHook(
+        std::uintptr_t container,
+        std::uint32_t packedCommand,
+        const char* stateName)
+    {
+        const auto caller =
+            reinterpret_cast<std::uintptr_t>(
+                _ReturnAddress()
+                );
+
+        const bool traceActive =
+            IsTraceActive();
+
+        const std::uint32_t originalPackedCommand =
+            packedCommand;
+
+        //
+        // control test
+        //
+        // in Tiger:
+        //
+        // light:
+        // packed = 0x00160042
+        //
+        // heavy:
+        // packed = 0x00520042
+        //
+       
+        if (traceActive &&
+            !g_attackOverrideUsed.load() &&
+            caller == 0x142EFC750 &&
+            packedCommand == 0x00160042 &&
+            stateName != nullptr &&
+            std::strcmp(stateName, "Attack") == 0)
+        {
+            packedCommand =
+                0x00520042;
+
+            g_attackOverrideUsed.store(true);
+
+            HJ::Logger::Info(
+                "ATTACK OVERRIDE: "
+                "Tiger light 0x00160042 -> "
+                "Tiger heavy 0x00520042"
+            );
+        }
+
+        if (traceActive)
+        {
+            const std::uint32_t commandKey =
+                packedCommand & 0xFFFF;
+
+            const std::uint32_t variant =
+                packedCommand >> 16;
+
+            std::ostringstream stream;
+
+            stream
+                << "ATTACK TRACE"
+                << " name=\""
+                << (stateName ? stateName : "<null>")
+                << "\""
+                << " container=0x"
+                << std::hex
+                << container
+                << " original=0x"
+                << originalPackedCommand
+                << " packed=0x"
+                << packedCommand
+                << " key=0x"
+                << commandKey
+                << " variant=0x"
+                << variant
+                << " caller=0x"
+                << caller;
+
+            HJ::Logger::Info(
+                stream.str()
+            );
+        }
+
+        g_attackBehaviorHook.call<void>(
+            container,
+            packedCommand,
+            stateName
+        );
+    }
 
     // addresses:
     // ulonglong FUN_142E8F500(
@@ -37,12 +241,58 @@ namespace
     // r8d = mode
     // r9b = option
     //
+
+    void* __fastcall NamedStateHook(
+        std::uintptr_t stateContainer,
+        void* stateObject,
+        const char* stateName)
+    {
+        const auto caller =
+            reinterpret_cast<std::uintptr_t>(
+                _ReturnAddress()
+                );
+
+        if (IsTraceActive())
+        {
+            std::ostringstream stream;
+
+            stream
+                << "STATE TRACE"
+                << " name=\""
+                << (stateName ? stateName : "<null>")
+                << "\""
+                << " container=0x"
+                << std::hex
+                << stateContainer
+                << " object=0x"
+                << reinterpret_cast<std::uintptr_t>(
+                    stateObject
+                    )
+                << " caller=0x"
+                << caller;
+
+            HJ::Logger::Info(
+                stream.str()
+            );
+        }
+
+        return g_namedStateHook.call<void*>(
+            stateContainer,
+            stateObject,
+            stateName
+        );
+    }
+
+
     std::uint64_t __fastcall CheckEligibilityHook(
         std::uint64_t context,
         std::uint32_t key,
         std::uint32_t mode,
         std::uint8_t option)
     {
+        const bool traceActive =
+            IsTraceActive();
+
         const auto caller =
             reinterpret_cast<std::uintptr_t>(
                 _ReturnAddress()
@@ -57,59 +307,87 @@ namespace
                 option
             );
 
-        
+
         const bool eligible =
             (result & 0xFF) != 0;
 
-       
+
         // function casn execute OOOFFFTEEENNNN only log when something about the check changes on this thread
 
-        thread_local bool hasPrevious = false;
-        thread_local std::uint32_t previousKey = 0;
-        thread_local std::uint32_t previousMode = 0;
-        thread_local std::uint8_t previousOption = 0;
-        thread_local std::uintptr_t previousCaller = 0;
-        thread_local bool previousEligible = false;
-
-        const bool changed =
-            !hasPrevious ||
-            key != previousKey ||
-            mode != previousMode ||
-            option != previousOption ||
-            caller != previousCaller ||
-            eligible != previousEligible;
-
-        if (changed)
+        if (traceActive)
         {
-            std::ostringstream stream;
+            const TraceEntry entry{
+                key,
+                mode,
+                option,
+                caller,
+                eligible
+            };
 
-            stream
-                << "FighterCommand eligibility:"
-                << " key=0x"
-                << std::hex
-                << key
-                << " mode=0x"
-                << mode
-                << " option=0x"
-                << static_cast<unsigned int>(option)
-                << " caller=0x"
-                << caller
-                << " result="
-                << (eligible ? "true" : "false");
+            bool firstOccurrence = false;
 
-            HJ::Logger::Info(stream.str());
+            {
+                std::scoped_lock lock(g_traceMutex);
 
-            hasPrevious = true;
-            previousKey = key;
-            previousMode = mode;
-            previousOption = option;
-            previousCaller = caller;
-            previousEligible = eligible;
+                firstOccurrence =
+                    g_traceEntries.insert(entry).second;
+            }
+
+            if (firstOccurrence)
+            {
+                const ULONGLONG now =
+                    GetTickCount64();
+
+                const ULONGLONG elapsed =
+                    now - g_traceStartedAt.load();
+
+                std::ostringstream stream;
+
+                stream
+                    << "TRACE +"
+                    << std::dec
+                    << elapsed
+                    << "ms"
+                    << " thread="
+                    << GetCurrentThreadId()
+                    << " context=0x"
+                    << std::hex
+                    << context
+                    << " key=0x"
+                    << key
+                    << " mode=0x"
+                    << mode
+                    << " option=0x"
+                    << static_cast<unsigned int>(option)
+                    << " caller=0x"
+                    << caller
+                    << " result="
+                    << (eligible ? "true" : "false");
+
+                HJ::Logger::Info(stream.str());
+            }
         }
 
-        // dont alter the result during observation ever
         return result;
     }
+}
+
+DWORD WINAPI TraceHotkeyThread(LPVOID)
+{
+    HJ::Logger::Info(
+        "Combat trace hotkey ready. Press F6 to capture."
+    );
+
+    while (true)
+    {
+        UpdateTraceHotkey();
+
+        IsTraceActive();
+
+        Sleep(10);
+    }
+
+    return 0;
 }
 
 namespace HJ::Hooks::FighterCommand
@@ -141,8 +419,47 @@ namespace HJ::Hooks::FighterCommand
         constexpr std::uintptr_t CheckEligibilityRva =
             0x02E8F500;
 
+
+        constexpr std::uintptr_t NamedStateRva =
+            0x003B43D0;
+
+        constexpr std::uintptr_t AttackBehaviorRva =
+            0x02F21D80;
+
         const auto target =
             base + CheckEligibilityRva;
+
+        const auto namedStateTarget =
+            base + NamedStateRva;
+
+        const auto attackBehaviorTarget =
+            base + AttackBehaviorRva;
+        {
+            std::ostringstream stream;
+
+            stream
+                << "Installing attack behavior hook at 0x"
+                << std::hex
+                << attackBehaviorTarget;
+
+            Logger::Info(
+                stream.str()
+            );
+        }
+
+        g_attackBehaviorHook =
+            safetyhook::create_inline(
+                reinterpret_cast<void*>(
+                    attackBehaviorTarget
+                    ),
+                reinterpret_cast<void*>(
+                    &AttackBehaviorHook
+                    )
+            );
+
+        Logger::Info(
+            "Attack behavior hook installed."
+        );
 
         {
             std::ostringstream stream;
@@ -166,6 +483,54 @@ namespace HJ::Hooks::FighterCommand
         Logger::Info(
             "FighterCommand eligibility hook installed."
         );
+
+        {
+            std::ostringstream stream;
+
+            stream
+                << "Installing named state hook at 0x"
+                << std::hex
+                << namedStateTarget;
+
+            Logger::Info(
+                stream.str()
+            );
+        }
+
+        g_namedStateHook =
+            safetyhook::create_inline(
+                reinterpret_cast<void*>(
+                    namedStateTarget
+                    ),
+                reinterpret_cast<void*>(
+                    &NamedStateHook
+                    )
+            );
+
+        Logger::Info(
+            "Named state hook installed."
+        );
+
+        HANDLE traceThread =
+            CreateThread(
+                nullptr,
+                0,
+                &TraceHotkeyThread,
+                nullptr,
+                0,
+                nullptr
+            );
+
+        if (!traceThread)
+        {
+            Logger::Error(
+                "Failed to create combat trace hotkey thread."
+            );
+
+            return false;
+        }
+
+        CloseHandle(traceThread);
 
         return true;
     }
