@@ -42,4 +42,9 @@ namespace HJ::Hooks::ActionRequest
     bool Initialize();
 
     void EnableLightToHeavyTest();
+
+    bool RequestAttack(
+        std::uint32_t packedCommand
+    );
+    
 }

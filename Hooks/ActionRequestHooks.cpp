@@ -16,6 +16,14 @@ namespace
 {
     SafetyHookInline g_attackBehaviorHook{};
 
+    SafetyHookInline g_playerCombatUpdateHook{};
+
+    std::atomic<std::uintptr_t>
+        g_playerCombatObject{ 0 };
+
+    std::atomic<std::uint32_t>
+        g_pendingAttack{ 0 };
+
     std::atomic<bool> g_lightToHeavyTest{ false };
 
     void __fastcall AttackBehaviorHook(
@@ -36,10 +44,35 @@ namespace
             stateName != nullptr &&
             std::strcmp(stateName, "Attack") == 0;
 
+        if (isPlayerAttack)
+        {
+            g_playerCombatObject.store(
+                container
+            );
+
+            std::ostringstream stream;
+
+            stream
+                << "Captured player combat object: 0x"
+                << std::hex
+                << container;
+
+            HJ::Logger::Info(
+                stream.str()
+            );
+        }
+
         if (isPlayerAttack &&
             g_lightToHeavyTest.load())
         {
             std::uint32_t replacement = 0;
+            
+            if (isPlayerAttack)
+            {
+                g_playerCombatObject.store(
+                    container
+                );
+            }
 
             if (HJ::Combat::TryGetHeavyReplacement(
                 packedCommand,
@@ -109,6 +142,81 @@ namespace
             packedCommand,
             stateName
         );
+    }
+    
+    std::uint8_t __fastcall PlayerCombatUpdateHook(
+        std::uintptr_t combatObject)
+    {
+        const std::uint8_t result =
+            g_playerCombatUpdateHook.call<
+            std::uint8_t
+            >(
+                combatObject
+            );
+
+        const std::uintptr_t playerObject =
+            g_playerCombatObject.load();
+
+        if (playerObject == 0 ||
+            combatObject != playerObject)
+        {
+            return result;
+        }
+
+        const std::uint32_t pendingAttack =
+            g_pendingAttack.exchange(0);
+
+        if (pendingAttack == 0)
+        {
+            return result;
+        }
+
+        //
+        // Player combat vtable +0xD0
+        // = FUN_142F22340
+        //
+        using DispatchCommandFn =
+            void(__fastcall*)(
+                std::uintptr_t,
+                std::uint32_t
+                );
+
+        const std::uintptr_t vtable =
+            *reinterpret_cast<std::uintptr_t*>(
+                combatObject
+                );
+
+        const auto dispatchCommand =
+            *reinterpret_cast<DispatchCommandFn*>(
+                vtable + 0xD0
+                );
+
+        {
+            std::ostringstream stream;
+
+            stream
+                << "HJ DIRECT ATTACK"
+                << " object=0x"
+                << std::hex
+                << combatObject
+                << " command=0x"
+                << pendingAttack
+                << " dispatcher=0x"
+                << reinterpret_cast<std::uintptr_t>(
+                    dispatchCommand
+                    );
+
+            HJ::Logger::Info(
+                stream.str()
+            );
+        }
+
+        dispatchCommand(
+            combatObject,
+            pendingAttack
+        );
+
+        return result;
     }
 }
 
@@ -202,8 +310,20 @@ namespace HJ::Hooks::ActionRequest
         constexpr std::uintptr_t AttackBehaviorRva =
             0x02F21D80;
 
+        //
+        // PlayerCombat_Update
+        // 0x142EC3830 - 0x140000000
+        // = 0x02EC3830
+        //
+
+        constexpr std::uintptr_t PlayerCombatUpdateRva =
+            0x02EC3830;
+
         const auto target =
             base + AttackBehaviorRva;
+
+        const auto playerCombatUpdateTarget =
+            base + PlayerCombatUpdateRva;
 
         {
             std::ostringstream stream;
@@ -228,6 +348,64 @@ namespace HJ::Hooks::ActionRequest
 
         Logger::Info(
             "Action request hook installed."
+        );
+
+        {
+            std::ostringstream stream;
+
+            stream
+                << "Installing player combat update hook at 0x"
+                << std::hex
+                << playerCombatUpdateTarget;
+
+            Logger::Info(
+                stream.str()
+            );
+        }
+
+        g_playerCombatUpdateHook =
+            safetyhook::create_inline(
+                reinterpret_cast<void*>(
+                    playerCombatUpdateTarget
+                    ),
+                reinterpret_cast<void*>(
+                    &PlayerCombatUpdateHook
+                    )
+            );
+
+        Logger::Info(
+            "Player combat update hook installed."
+        );
+
+        return true;
+    }
+
+    bool RequestAttack(
+        std::uint32_t packedCommand)
+    {
+        if (g_playerCombatObject.load() == 0)
+        {
+            Logger::Warning(
+                "Cannot request attack: "
+                "player combat object has not been captured yet."
+            );
+
+            return false;
+        }
+
+        g_pendingAttack.store(
+            packedCommand
+        );
+
+        std::ostringstream stream;
+
+        stream
+            << "Queued HJ attack command 0x"
+            << std::hex
+            << packedCommand;
+
+        Logger::Info(
+            stream.str()
         );
 
         return true;

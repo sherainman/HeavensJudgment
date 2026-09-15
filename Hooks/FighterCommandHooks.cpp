@@ -1,6 +1,7 @@
 #include "FighterCommandHooks.hpp"
 #include "ActionRequestsHooks.hpp"
 
+#include "../Combat/CombatSystem.hpp"
 #include "../Core/Logger.hpp"
 
 #include <Windows.h>
@@ -99,6 +100,18 @@ namespace
         }
     }
 
+    void UpdateDirectAttackHotkey()
+    {
+        if ((GetAsyncKeyState(VK_F7) & 1) == 0)
+        {
+            return;
+        }
+
+        HJ::Hooks::ActionRequest::RequestAttack(
+            HJ::Combat::Commands::TigerHeavy
+        );
+    }
+
     bool IsTraceActive()
     {
         const ULONGLONG until =
@@ -136,9 +149,8 @@ namespace
         while (true)
         {
             UpdateTraceHotkey();
+            UpdateDirectAttackHotkey();
 
-            // This also ensures the FINISHED message appears
-            // even if no eligibility calls happen near the end.
             IsTraceActive();
 
             Sleep(10);
