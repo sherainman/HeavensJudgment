@@ -85,7 +85,7 @@ namespace
                 now + TraceDurationMs
             );
 
-            HJ::Hooks::ActionRequest::EnableTigerLightToHeavyTest();
+            HJ::Hooks::ActionRequest::EnableLightToHeavyTest();
 
             {
                 std::scoped_lock lock(g_traceMutex);
@@ -175,6 +175,13 @@ namespace
                     )
                 << " caller=0x"
                 << caller;
+
+            HJ::Hooks::ActionRequest::TraceAttackObject(
+                stateContainer,
+                stateObject,
+                stateName,
+                caller
+            );
 
             HJ::Logger::Info(
                 stream.str()

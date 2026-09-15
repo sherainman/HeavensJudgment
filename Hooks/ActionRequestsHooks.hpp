@@ -23,6 +23,13 @@ namespace HJ::Hooks::ActionRequest
         return packedCommand >> 16;
     }
 
+    void TraceAttackObject(
+        std::uintptr_t stateContainer,
+        void* stateObject,
+        const char* stateName,
+        std::uintptr_t caller
+    );
+
     constexpr std::uint32_t MakePackedCommand(
         std::uint16_t commandKey,
         std::uint16_t variant)
@@ -34,5 +41,5 @@ namespace HJ::Hooks::ActionRequest
 
     bool Initialize();
 
-    void EnableTigerLightToHeavyTest();
+    void EnableLightToHeavyTest();
 }
