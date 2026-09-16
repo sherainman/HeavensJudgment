@@ -7,5 +7,5 @@
     <File Path=".gitignore" />
     <File Path="README.md" />
   </Folder>
-  <Project Path="Heaven's Judgment.vcxproj" />
+  <Project Path="Heaven's Judgment.vcxproj" Id="f1db49dd-4de8-4f56-a26a-2671601b8cf4" />
 </Solution>

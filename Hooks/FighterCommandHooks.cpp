@@ -24,6 +24,7 @@ namespace
 {
 	SafetyHookInline g_checkEligibilityHook{};
 	SafetyHookInline g_namedStateHook{};
+	SafetyHookInline g_controllerTranslateHook{};
 
 	std::atomic<bool> g_f6WasDown{ false };
 	std::atomic<ULONGLONG> g_traceUntil{ 0 };
@@ -139,12 +140,72 @@ namespace
 		previousFighting = fighting;
 	}
 
+	std::uint64_t __fastcall ControllerTranslateHook(
+		std::uint32_t controllerIndex,
+		std::uint32_t* buttonMask,
+		float* leftStickX,
+		float* leftStickY,
+		float* rightStickX,
+		float* rightStickY,
+		std::uint8_t* buttonValues)
+	{
+		const std::uint64_t result =
+			g_controllerTranslateHook.call<std::uint64_t>(
+				controllerIndex,
+				buttonMask,
+				leftStickX,
+				leftStickY,
+				rightStickX,
+				rightStickY,
+				buttonValues
+			);
+
+		if (controllerIndex == 0 &&
+			HJ::Combat::IsInCombat() &&
+			buttonMask != nullptr &&
+			buttonValues != nullptr)
+		{
+			//
+			// hj now owns these controls when fighting
+			//
+			// A / Cross = 0x01
+			// LT        = 0x10
+			// RT        = 0x20
+			// LB        = 0x40
+			// RB        = 0x80
+			//
+
+			constexpr std::uint32_t kOwnedCombatButtons =
+				0x01u |
+				0x10u |
+				0x20u |
+				0x40u |
+				0x80u;
+
+			*buttonMask &= ~kOwnedCombatButtons;
+
+			// A / Cross
+			buttonValues[0] = 0;
+
+			// LT / RT analog values
+			buttonValues[4] = 0;
+			buttonValues[5] = 0;
+
+			// LB / RB
+			buttonValues[6] = 0;
+			buttonValues[7] = 0;
+		}
+
+		return result;
+	}
+
 	void UpdateControllerCombatInput()
 	{
 		static bool previousRT = false;
 		static bool previousRB = false;
 		static bool previousLT = false;
 		static bool previousLB = false;
+		static bool previousA = false;
 
 		XINPUT_STATE state{};
 
@@ -156,6 +217,7 @@ namespace
 			previousRB = false;
 			previousLT = false;
 			previousLB = false;
+			previousA = false;
 
 			return;
 		}
@@ -174,7 +236,33 @@ namespace
 			(state.Gamepad.wButtons &
 				XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
 
-		// RT -> Boxer Light
+		const bool currentA =
+			(state.Gamepad.wButtons &
+				XINPUT_GAMEPAD_A) != 0;
+
+		bool fighting = false;
+
+		const bool hasFightingState =
+			HJ::Engine::TryGetFightingState(fighting);
+
+
+		if (!hasFightingState || !fighting)
+		{
+			//
+			// so hj doesnt own gameplay controls out of combat
+			//
+
+			previousA = currentA;
+			previousRT = currentRT;
+			previousRB = currentRB;
+			previousLT = currentLT;
+			previousLB = currentLB;
+
+			return;
+		}
+
+
+		// RT / R2  -> Boxer Light
 
 		if (currentRT && !previousRT)
 		{
@@ -187,7 +275,7 @@ namespace
 			);
 		}
 
-		// RB -> Tiger Heavy
+		// RB / R1 -> Tiger Heavy
 
 		if (currentRB && !previousRB)
 		{
@@ -200,7 +288,7 @@ namespace
 			);
 		}
 
-		// LT -> Boxer Heavy
+		// LT / L2 -> Boxer Heavy
 
 		if (currentLT && !previousLT)
 		{
@@ -213,7 +301,7 @@ namespace
 			);
 		}
 
-		// LB -> Crane EX Grab
+		// LB / L1 -> Crane EX Grab
 
 		if (currentLB && !previousLB)
 		{
@@ -226,10 +314,22 @@ namespace
 			);
 		}
 
+		// A / Cross -> Evade
+
+		if (currentA && !previousA)
+		{
+			HJ::Logger::Info(
+				"HJ INPUT: A / Cross -> Evade"
+			);
+
+			HJ::Hooks::ActionRequest::RequestEvade();
+		}
+
 		previousRT = currentRT;
 		previousRB = currentRB;
 		previousLT = currentLT;
 		previousLB = currentLB;
+		previousA = currentA;
 	}
 
 	void UpdateDirectEvadeHotkey()
@@ -494,6 +594,14 @@ namespace HJ::Hooks::FighterCommand
 				gameModule
 				);
 
+		// 
+		// xinput_pollandtranslatecontroller
+		// 0x1419F2EC0 - 0x140000000
+		// = 0x019F2EC0
+
+		constexpr std::uintptr_t ControllerTranslateRva =
+			0x019F2EC0;
+
 		//
 		// TEMPORARY hardcoded rva
 		// 0x142E8F500 - 0x140000000
@@ -515,6 +623,9 @@ namespace HJ::Hooks::FighterCommand
 
 		const auto namedStateTarget =
 			base + NamedStateRva;
+
+		const auto controllerTranslateTarget =
+			base + ControllerTranslateRva;
 
 		{
 			std::ostringstream stream;
@@ -566,6 +677,42 @@ namespace HJ::Hooks::FighterCommand
 
 		Logger::Info(
 			"Named state hook installed."
+		);
+
+		{
+			std::ostringstream stream;
+
+			stream
+				<< "Installing controller translate hook at 0x"
+				<< std::hex
+				<< controllerTranslateTarget;
+
+			Logger::Info(
+				stream.str()
+			);
+		}
+
+		g_controllerTranslateHook =
+			safetyhook::create_inline(
+				reinterpret_cast<void*>(
+					controllerTranslateTarget
+					),
+				reinterpret_cast<void*>(
+					&ControllerTranslateHook
+					)
+			);
+
+		if (!g_controllerTranslateHook)
+		{
+			Logger::Error(
+				"Failed to install controller translate hook."
+			);
+
+			return false;
+		}
+
+		Logger::Info(
+			"Controller translate hook installed."
 		);
 
 		HANDLE traceThread =

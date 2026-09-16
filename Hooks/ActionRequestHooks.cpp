@@ -20,6 +20,8 @@ namespace
 
 	SafetyHookInline g_playerCombatUpdateHook{};
 
+	SafetyHookInline g_swayRequestHook{};
+
 	std::atomic<std::uintptr_t>
 		g_playerCombatObject{ 0 };
 
@@ -29,6 +31,12 @@ namespace
 	std::atomic<bool> g_pendingEvade{ false };
 
 	std::atomic<bool> g_lightToHeavyTest{ false };
+
+	constexpr bool kOwnVanillaEvadeInput =
+		true;
+
+	constexpr std::uintptr_t kVanillaSwayCallerRva =
+		0x02EEFB85;
 
 	void __fastcall AttackBehaviorHook(
 		std::uintptr_t container,
@@ -148,6 +156,64 @@ namespace
 		);
 	}
 
+	void __fastcall SwayRequestTraceHook(
+		std::uintptr_t combatObject)
+	{
+		const auto caller =
+			reinterpret_cast<std::uintptr_t>(
+				_ReturnAddress()
+				);
+
+		const auto moduleBase =
+			reinterpret_cast<std::uintptr_t>(
+				GetModuleHandleW(nullptr)
+				);
+
+		const std::uintptr_t playerObject =
+			g_playerCombatObject.load();
+
+		const bool isCapturedPlayer =
+			playerObject != 0 &&
+			combatObject == playerObject;
+
+		const bool isVanillaEvadeRequest =
+			caller ==
+			moduleBase +
+			kVanillaSwayCallerRva;
+
+
+		if (kOwnVanillaEvadeInput &&
+			isCapturedPlayer &&
+			isVanillaEvadeRequest &&
+			HJ::Combat::IsInCombat())
+		{
+			HJ::Logger::Info(
+				"HJ VANILLA EVADE SUPPRESSED"
+			);
+
+			return;
+		}
+
+		const auto message =
+			std::format(
+				"SWAY REQUEST TRACE object=0x{:X} caller=0x{:X}",
+				static_cast<unsigned long long>(
+					combatObject
+					),
+				static_cast<unsigned long long>(
+					caller
+					)
+			);
+
+		HJ::Logger::Info(
+			message.c_str()
+		);
+
+		g_swayRequestHook.call<void>(
+			combatObject
+		);
+	}
+
 	std::uint8_t __fastcall PlayerCombatUpdateHook(
 		std::uintptr_t combatObject)
 	{
@@ -198,6 +264,8 @@ namespace
 
 			return result;
 		}
+
+
 
 		std::uint32_t pendingAttack =
 			g_pendingAttack.exchange(0);
@@ -379,11 +447,17 @@ namespace HJ::Hooks::ActionRequest
 		constexpr std::uintptr_t PlayerCombatUpdateRva =
 			0x02EC3830;
 
+		constexpr std::uintptr_t kSwayRequestRva =
+			0x02F1ED80;
+
 		const auto target =
 			base + AttackBehaviorRva;
 
 		const auto playerCombatUpdateTarget =
 			base + PlayerCombatUpdateRva;
+
+		const auto swayRequestAddress =
+			base + kSwayRequestRva;
 
 		{
 			std::ostringstream stream;
@@ -435,6 +509,42 @@ namespace HJ::Hooks::ActionRequest
 
 		Logger::Info(
 			"Player combat update hook installed."
+		);
+
+		{
+			std::ostringstream stream;
+
+			stream
+				<< "Installing sway request trace hook at 0x"
+				<< std::hex
+				<< swayRequestAddress;
+
+			Logger::Info(
+				stream.str()
+			);
+		}
+
+		g_swayRequestHook =
+			safetyhook::create_inline(
+				reinterpret_cast<void*>(
+					swayRequestAddress
+					),
+				reinterpret_cast<void*>(
+					&SwayRequestTraceHook
+					)
+			);
+
+		if (!g_swayRequestHook)
+		{
+			Logger::Error(
+				"Failed to install sway request trace hook."
+			);
+
+			return false;
+		}
+
+		Logger::Info(
+			"Sway request trace hook installed."
 		);
 
 		return true;
