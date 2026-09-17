@@ -3,10 +3,8 @@
 #include "FighterCommandHooks.hpp"
 #include "ActionRequestsHooks.hpp"
 
-#include "../Combat/CombatSystem.hpp"
 #include "../Core/Logger.hpp"
 #include "../Engine/Engine.hpp"
-#include "../Combat/InputBuffer.hpp"
 
 #include <Windows.h>
 #include <safetyhook.hpp>
@@ -29,6 +27,7 @@ namespace
 	std::atomic<bool> g_f6WasDown{ false };
 	std::atomic<ULONGLONG> g_traceUntil{ 0 };
 	std::atomic<ULONGLONG> g_traceStartedAt{ 0 };
+	std::atomic<bool> g_lockOnEnabled{ false };
 
 	constexpr ULONGLONG TraceDurationMs = 2000;
 
@@ -91,8 +90,6 @@ namespace
 			g_traceUntil.store(
 				now + TraceDurationMs
 			);
-
-			HJ::Hooks::ActionRequest::EnableLightToHeavyTest();
 
 			{
 				std::scoped_lock lock(g_traceMutex);
@@ -160,40 +157,57 @@ namespace
 				buttonValues
 			);
 
-		if (controllerIndex == 0 &&
-			HJ::Combat::IsInCombat() &&
-			buttonMask != nullptr &&
-			buttonValues != nullptr)
+		if (controllerIndex != 0 ||
+			buttonMask == nullptr ||
+			buttonValues == nullptr)
 		{
-			//
-			// hj now owns these controls when fighting
-			//
-			// A / Cross = 0x01
-			// LT        = 0x10
-			// RT        = 0x20
-			// LB        = 0x40
-			// RB        = 0x80
-			//
+			return result;
+		}
 
-			constexpr std::uint32_t kOwnedCombatButtons =
-				0x01u |
-				0x10u |
-				0x20u |
-				0x40u |
-				0x80u;
+		bool fighting = false;
 
-			*buttonMask &= ~kOwnedCombatButtons;
+		if (!HJ::Engine::TryGetFightingState(fighting) ||
+			!fighting)
+		{
+			return result;
+		}
 
-			// A / Cross
-			buttonValues[0] = 0;
+		XINPUT_STATE state{};
 
-			// LT / RT analog values
-			buttonValues[4] = 0;
-			buttonValues[5] = 0;
+		if (XInputGetState(0, &state) != ERROR_SUCCESS)
+		{
+			return result;
+		}
 
-			// LB / RB
-			buttonValues[6] = 0;
-			buttonValues[7] = 0;
+		const bool physicalRT =
+			state.Gamepad.bRightTrigger >
+			XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+
+		//
+		// de translator layout
+		// square / x is mask 0x04, values[2]
+		// rt is mask 0x20 values[5]
+		//
+		constexpr std::uint32_t kSquareMask = 0x0004;
+		constexpr std::uint32_t kRTMask = 0x0020;
+
+		constexpr std::size_t kSquareIndex = 2;
+		constexpr std::size_t kRTIndex = 5;
+
+		//
+		// HJ gets rt in combat
+		// removes native rt from the translated state
+		//
+		*buttonMask &= ~kRTMask;
+		buttonValues[kRTIndex] = 0;
+
+		//
+		// rt token becomes fightercommands temp square token.
+		//
+		if (physicalRT)
+		{
+			*buttonMask |= kSquareMask;
+			buttonValues[kSquareIndex] = 0xFF;
 		}
 
 		return result;
@@ -201,11 +215,9 @@ namespace
 
 	void UpdateControllerCombatInput()
 	{
-		static bool previousRT = false;
-		static bool previousRB = false;
-		static bool previousLT = false;
-		static bool previousLB = false;
 		static bool previousA = false;
+		static bool previousR3 = false;
+		static bool previousFighting = false;
 
 		XINPUT_STATE state{};
 
@@ -213,108 +225,60 @@ namespace
 			0,
 			&state) != ERROR_SUCCESS)
 		{
-			previousRT = false;
-			previousRB = false;
-			previousLT = false;
-			previousLB = false;
 			previousA = false;
+			previousR3 = false;
 
 			return;
 		}
-
-		const bool currentRT =
-			state.Gamepad.bRightTrigger > 30;
-
-		const bool currentRB =
-			(state.Gamepad.wButtons &
-				XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
-
-		const bool currentLT =
-			state.Gamepad.bLeftTrigger > 30;
-
-		const bool currentLB =
-			(state.Gamepad.wButtons &
-				XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
 
 		const bool currentA =
 			(state.Gamepad.wButtons &
 				XINPUT_GAMEPAD_A) != 0;
 
+		const bool currentR3 =
+			(state.Gamepad.wButtons &
+				XINPUT_GAMEPAD_RIGHT_THUMB) != 0;
+
 		bool fighting = false;
 
 		const bool hasFightingState =
-			HJ::Engine::TryGetFightingState(fighting);
+			HJ::Engine::TryGetFightingState(
+				fighting
+			);
 
+		if (hasFightingState)
+		{
+			if (fighting && !previousFighting)
+			{
+				g_lockOnEnabled.store(true);
+
+				HJ::Logger::Info(
+					"HJ LOCK ON: enabled on combat entry"
+				);
+			}
+			else if (!fighting && previousFighting)
+			{
+				g_lockOnEnabled.store(false);
+
+				HJ::Logger::Info(
+					"HJ LOCK ON: disabled on combat exit"
+				);
+			}
+
+			previousFighting = fighting;
+		}
 
 		if (!hasFightingState || !fighting)
 		{
-			//
-			// so hj doesnt own gameplay controls out of combat
-			//
-
 			previousA = currentA;
-			previousRT = currentRT;
-			previousRB = currentRB;
-			previousLT = currentLT;
-			previousLB = currentLB;
+			previousR3 = currentR3;
 
 			return;
 		}
 
-
-		// RT / R2  -> Boxer Light
-
-		if (currentRT && !previousRT)
-		{
-			HJ::Logger::Info(
-				"HJ INPUT: RT -> Boxer Light"
-			);
-
-			HJ::Combat::InputBuffer::Push(
-				HJ::Combat::InputBuffer::Input::RightTrigger
-			);
-		}
-
-		// RB / R1 -> Tiger Heavy
-
-		if (currentRB && !previousRB)
-		{
-			HJ::Logger::Info(
-				"HJ INPUT: RB -> Tiger Heavy"
-			);
-
-			HJ::Combat::InputBuffer::Push(
-				HJ::Combat::InputBuffer::Input::RightBumper
-			);
-		}
-
-		// LT / L2 -> Boxer Heavy
-
-		if (currentLT && !previousLT)
-		{
-			HJ::Logger::Info(
-				"HJ INPUT: LT -> Boxer Heavy"
-			);
-
-			HJ::Combat::InputBuffer::Push(
-				HJ::Combat::InputBuffer::Input::LeftTrigger
-			);
-		}
-
-		// LB / L1 -> Crane EX Grab
-
-		if (currentLB && !previousLB)
-		{
-			HJ::Logger::Info(
-				"HJ INPUT: LB -> Crane EX Grab"
-			);
-
-			HJ::Combat::InputBuffer::Push(
-				HJ::Combat::InputBuffer::Input::LeftBumper
-			);
-		}
-
+		//
 		// A / Cross -> Evade
+		//
 
 		if (currentA && !previousA)
 		{
@@ -325,42 +289,26 @@ namespace
 			HJ::Hooks::ActionRequest::RequestEvade();
 		}
 
-		previousRT = currentRT;
-		previousRB = currentRB;
-		previousLT = currentLT;
-		previousLB = currentLB;
-		previousA = currentA;
-	}
+		//
+		// R3 -> toggle HJ guided lock on
+		//
 
-	void UpdateDirectEvadeHotkey()
-	{
-		static bool wasF8Down = false;
-
-		const bool isF8Down =
-			(GetAsyncKeyState(VK_F8) & 0x8000) != 0;
-
-		if (isF8Down && !wasF8Down)
+		if (currentR3 && !previousR3)
 		{
+			const bool enabled =
+				!g_lockOnEnabled.load();
+
+			g_lockOnEnabled.store(enabled);
+
 			HJ::Logger::Info(
-				"HJ INPUT: F8 direct evade"
+				enabled
+				? "HJ LOCK ON: enabled"
+				: "HJ LOCK ON: disabled"
 			);
-
-			HJ::Hooks::ActionRequest::RequestEvade();
 		}
 
-		wasF8Down = isF8Down;
-	}
-
-	void UpdateDirectAttackHotkey()
-	{
-		if ((GetAsyncKeyState(VK_F7) & 1) == 0)
-		{
-			return;
-		}
-
-		HJ::Hooks::ActionRequest::RequestAttack(
-			HJ::Combat::Commands::TigerHeavy
-		);
+		previousA = currentA;
+		previousR3 = currentR3;
 	}
 
 	bool IsTraceActive()
@@ -400,8 +348,6 @@ namespace
 		while (true)
 		{
 			UpdateTraceHotkey();
-			UpdateDirectAttackHotkey();
-			UpdateDirectEvadeHotkey();
 			UpdateControllerCombatInput();
 
 			UpdateEngineFightingDiagnostic();

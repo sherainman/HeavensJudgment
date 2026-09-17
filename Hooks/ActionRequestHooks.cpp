@@ -1,11 +1,11 @@
 #include "ActionRequestsHooks.hpp"
 #include "../Combat/CombatSystem.hpp"
-#include "../Combat/InputBuffer.hpp"
 
 #include "../Core/Logger.hpp"
 
 #include <Windows.h>
 #include <safetyhook.hpp>
+#include <Xinput.h>
 
 #include <atomic>
 #include <cstdint>
@@ -22,21 +22,33 @@ namespace
 
 	SafetyHookInline g_swayRequestHook{};
 
-	std::atomic<std::uintptr_t>
-		g_playerCombatObject{ 0 };
-
-	std::atomic<std::uint32_t>
-		g_pendingAttack{ 0 };
-
 	std::atomic<bool> g_pendingEvade{ false };
 
-	std::atomic<bool> g_lightToHeavyTest{ false };
+	std::atomic<std::uintptr_t>
+		g_playerCombatObject{ 0 };
 
 	constexpr bool kOwnVanillaEvadeInput =
 		true;
 
 	constexpr std::uintptr_t kVanillaSwayCallerRva =
 		0x02EEFB85;
+
+	constexpr std::uint32_t kSnakeVanillaLight =
+		0x000A0040;
+
+	constexpr std::uint32_t kSnakeVanillaHeavy =
+		0x00380040;
+
+	constexpr std::uint32_t kSnakeVanillaGrab =
+		0x002A0040;
+
+	// 
+	// HJ_RightLeg_1
+	// 
+	// Boxer table variant 0xD5, style key 0x73
+	//
+	constexpr std::uint32_t kHJRightLeg1 =
+		0x00D50073;
 
 	void __fastcall AttackBehaviorHook(
 		std::uintptr_t container,
@@ -48,68 +60,54 @@ namespace
 				_ReturnAddress()
 				);
 
-		const std::uint32_t originalPackedCommand =
-			packedCommand;
-
 		const bool isPlayerAttack =
 			caller == 0x142EFC750 &&
 			stateName != nullptr &&
 			std::strcmp(stateName, "Attack") == 0;
 
-		if (isPlayerAttack)
+		//
+		// HJ right leg uses square as its internal token in fightercommand, rt synthesizes square 
+		// but real square must not launch the kick too 
+		//
+		if (isPlayerAttack &&
+			packedCommand == kHJRightLeg1)
 		{
-			g_playerCombatObject.store(
-				container
-			);
+			XINPUT_STATE input{};
 
-			std::ostringstream stream;
+			const bool hasController =
+				XInputGetState(0, &input) == ERROR_SUCCESS;
 
-			stream
-				<< "Captured player combat object: 0x"
-				<< std::hex
-				<< container;
+			const bool physicalRT =
+				hasController &&
+				input.Gamepad.bRightTrigger >
+				XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
 
-			HJ::Logger::Info(
-				stream.str()
-			);
+			if (!physicalRT)
+			{
+				HJ::Logger::Info(
+					"HJ RIGHT LEG: physical Square route suppressed"
+				);
+
+				return;
+			}
 		}
 
+		const bool isVanillaSnakeCombatAction =
+			packedCommand == kSnakeVanillaLight ||
+			packedCommand == kSnakeVanillaHeavy ||
+			packedCommand == kSnakeVanillaGrab;
+
 		if (isPlayerAttack &&
-			g_lightToHeavyTest.load())
+			isVanillaSnakeCombatAction)
 		{
-			std::uint32_t replacement = 0;
+			HJ::Logger::Info(
+				std::format(
+					"HJ VANILLA SNAKE ACTION SUPPRESSED command=0x{:X}",
+					packedCommand
+				)
+			);
 
-			if (isPlayerAttack)
-			{
-				g_playerCombatObject.store(
-					container
-				);
-			}
-
-			if (HJ::Combat::TryGetHeavyReplacement(
-				packedCommand,
-				replacement))
-			{
-				if (g_lightToHeavyTest.exchange(false))
-				{
-					packedCommand =
-						replacement;
-
-					std::ostringstream stream;
-
-					stream
-						<< "ATTACK OVERRIDE"
-						<< " original=0x"
-						<< std::hex
-						<< originalPackedCommand
-						<< " replacement=0x"
-						<< replacement;
-
-					HJ::Logger::Info(
-						stream.str()
-					);
-				}
-			}
+			return;
 		}
 
 		{
@@ -133,8 +131,6 @@ namespace
 				<< " container=0x"
 				<< std::hex
 				<< container
-				<< " original=0x"
-				<< originalPackedCommand
 				<< " packed=0x"
 				<< packedCommand
 				<< " key=0x"
@@ -217,6 +213,23 @@ namespace
 	std::uint8_t __fastcall PlayerCombatUpdateHook(
 		std::uintptr_t combatObject)
 	{
+		const std::uintptr_t previousPlayerObject =
+			g_playerCombatObject.exchange(
+				combatObject
+			);
+
+		if (previousPlayerObject != combatObject)
+		{
+			HJ::Logger::Info(
+				std::format(
+					"Captured player combat object from update: 0x{:X}",
+					static_cast<unsigned long long>(
+						combatObject
+						)
+				)
+			);
+		}
+
 		const std::uint8_t result =
 			g_playerCombatUpdateHook.call<
 			std::uint8_t
@@ -264,85 +277,6 @@ namespace
 
 			return result;
 		}
-
-
-
-		std::uint32_t pendingAttack =
-			g_pendingAttack.exchange(0);
-
-		if (!HJ::Combat::IsInCombat())
-		{
-			HJ::Combat::InputBuffer::Clear();
-
-			return result;
-		}
-
-		//
-		// f7 has priority,
-		// otherwise consume oldest player input from the combat buffer
-
-		if (pendingAttack == 0)
-		{
-			HJ::Combat::InputBuffer::Entry input{};
-
-			if (!HJ::Combat::InputBuffer::TryConsume(
-				input))
-			{
-				return result;
-			}
-
-			if (!HJ::Combat::TryResolveInput(
-				input.input,
-				pendingAttack))
-			{
-				return result;
-			}
-		}
-
-		//
-		// Player combat vtable +0xD0
-		// = FUN_142F22340
-		//
-		using DispatchCommandFn =
-			void(__fastcall*)(
-				std::uintptr_t,
-				std::uint32_t
-				);
-
-		const std::uintptr_t vtable =
-			*reinterpret_cast<std::uintptr_t*>(
-				combatObject
-				);
-
-		const auto dispatchCommand =
-			*reinterpret_cast<DispatchCommandFn*>(
-				vtable + 0xD0
-				);
-
-		{
-			std::ostringstream stream;
-
-			stream
-				<< "HJ DIRECT ATTACK"
-				<< " object=0x"
-				<< std::hex
-				<< combatObject
-				<< " command=0x"
-				<< pendingAttack
-				<< " dispatcher=0x"
-				<< reinterpret_cast<std::uintptr_t>(
-					dispatchCommand
-					);
-
-			HJ::Logger::Info(
-				stream.str()
-			);
-		}
-
-		dispatchCommand(
-			combatObject,
-			pendingAttack
-		);
 
 		return result;
 	}
@@ -449,6 +383,7 @@ namespace HJ::Hooks::ActionRequest
 
 		constexpr std::uintptr_t kSwayRequestRva =
 			0x02F1ED80;
+
 
 		const auto target =
 			base + AttackBehaviorRva;
@@ -577,54 +512,5 @@ namespace HJ::Hooks::ActionRequest
 		);
 
 		return true;
-	}
-
-	bool RequestAttack(
-		std::uint32_t packedCommand)
-	{
-		if (!HJ::Combat::IsInCombat())
-		{
-			Logger::Warning(
-				"Cannot request attack: player is not in combat."
-			);
-
-			return false;
-		}
-
-		if (g_playerCombatObject.load() == 0)
-		{
-			Logger::Warning(
-				"Cannot request attack: "
-				"player combat object has not been captured yet."
-			);
-
-			return false;
-		}
-
-		g_pendingAttack.store(
-			packedCommand
-		);
-
-		std::ostringstream stream;
-
-		stream
-			<< "Queued HJ attack command 0x"
-			<< std::hex
-			<< packedCommand;
-
-		Logger::Info(
-			stream.str()
-		);
-
-		return true;
-	}
-
-	void EnableLightToHeavyTest()
-	{
-		g_lightToHeavyTest.store(true);
-
-		Logger::Info(
-			"Next known player light attack will be replaced with heavy."
-		);
 	}
 }
