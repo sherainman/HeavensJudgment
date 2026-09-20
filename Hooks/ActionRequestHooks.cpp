@@ -14,6 +14,18 @@
 #include <intrin.h>
 #include <sstream>
 #include <format>
+#include <cmath>
+
+struct HJPlayerTransform
+{
+	float positionX;
+	float positionY;
+	float positionZ;
+
+	float forwardX;
+	float forwardY;
+	float forwardZ;
+};
 
 namespace
 {
@@ -48,6 +60,40 @@ namespace
 
 	constexpr std::uint8_t kBoxerCombatStyle =
 		5;
+
+	std::atomic<std::uintptr_t> g_playerEntity{ 0 };
+
+	constexpr std::uintptr_t kEntityPointerTableRva =
+		0x0430EDC0;
+
+	constexpr std::uintptr_t kEntityGenerationTableRva =
+		0x0430EDC8;
+
+	constexpr std::uintptr_t kEntityTypeTableRva =
+		0x0430EDCC;
+
+	constexpr std::uintptr_t kPlayerPositionOffset =
+		0x10F0;
+
+	struct PlayerPosition
+	{
+		float x;
+		float y;
+		float z;
+	};
+
+	std::atomic<float> g_playerPositionX{ 0.0f };
+	std::atomic<float> g_playerPositionY{ 0.0f };
+	std::atomic<float> g_playerPositionZ{ 0.0f };
+
+	std::atomic<float> g_playerForwardX{ 0.0f };
+	std::atomic<float> g_playerForwardY{ 0.0f };
+	std::atomic<float> g_playerForwardZ{ 1.0f };
+
+	std::atomic<bool> g_playerTransformValid{ false };
+
+	PlayerPosition g_previousPlayerPosition{};
+	bool g_havePreviousPlayerPosition = false;
 
 	// 
 	// HJ_RightLeg_1
@@ -434,6 +480,222 @@ namespace
 		);
 	}
 
+	bool TryReadPlayerPosition(
+		std::uintptr_t entity,
+		PlayerPosition& outPosition) noexcept
+	{
+		if (entity == 0)
+			return false;
+
+		__try
+		{
+			outPosition =
+				*reinterpret_cast<
+				const PlayerPosition*>(
+					entity +
+					kPlayerPositionOffset
+					);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+
+		return
+			std::isfinite(outPosition.x) &&
+			std::isfinite(outPosition.y) &&
+			std::isfinite(outPosition.z);
+	}
+
+	bool UpdatePlayerTransform(
+		std::uintptr_t entity)
+	{
+		PlayerPosition current{};
+
+		if (!TryReadPlayerPosition(
+			entity,
+			current))
+		{
+			g_playerTransformValid.store(
+				false,
+				std::memory_order_release
+			);
+
+			return false;
+		}
+
+
+		if (g_havePreviousPlayerPosition)
+		{
+			const float dx =
+				current.x -
+				g_previousPlayerPosition.x;
+
+			const float dz =
+				current.z -
+				g_previousPlayerPosition.z;
+
+			const float distanceSquared =
+				dx * dx +
+				dz * dz;
+
+
+			// only update when facing from believable movement
+			// should give tackle approach direction without re yagamis
+			// rotattion structure separately
+			if (distanceSquared > 0.000001f &&
+				distanceSquared < 4.0f)
+			{
+				const float distance =
+					std::sqrt(
+						distanceSquared
+					);
+
+				g_playerForwardX.store(
+					dx / distance,
+					std::memory_order_relaxed
+				);
+
+				g_playerForwardY.store(
+					0.0f,
+					std::memory_order_relaxed
+				);
+
+				g_playerForwardZ.store(
+					dz / distance,
+					std::memory_order_relaxed
+				);
+			}
+		}
+
+
+		g_previousPlayerPosition =
+			current;
+
+		g_havePreviousPlayerPosition =
+			true;
+
+
+		g_playerPositionX.store(
+			current.x,
+			std::memory_order_relaxed
+		);
+
+		g_playerPositionY.store(
+			current.y,
+			std::memory_order_relaxed
+		);
+
+		g_playerPositionZ.store(
+			current.z,
+			std::memory_order_relaxed
+		);
+
+
+		g_playerTransformValid.store(
+			true,
+			std::memory_order_release
+		);
+
+		return true;
+	}
+
+	std::uintptr_t ResolvePlayerEntity(
+		std::uintptr_t combatObject)
+	{
+		if (!combatObject)
+			return 0;
+
+		// FUN_142ED1270 received combatobject + 0x30 param param_1 + 8 becomes combatObject + 0x38
+		const std::uintptr_t objectA =
+			*reinterpret_cast<
+			const std::uintptr_t*>(
+				combatObject + 0x38
+				);
+
+		if (!objectA)
+			return 0;
+
+
+		const std::uintptr_t objectB =
+			*reinterpret_cast<
+			const std::uintptr_t*>(
+				objectA + 0x3C8
+				);
+
+		if (!objectB)
+			return 0;
+
+
+		const std::uint32_t handle =
+			*reinterpret_cast<
+			const std::uint32_t*>(
+				objectB + 0x0C
+				);
+
+		if (!handle)
+			return 0;
+
+
+		const std::uint32_t index =
+			handle & 0xFFFFF;
+
+		if (index >= 0x80000)
+			return 0;
+
+
+		const std::uintptr_t entryOffset =
+			static_cast<std::uintptr_t>(
+				index
+				) * 0x20;
+
+
+		const std::uintptr_t moduleBase =
+			reinterpret_cast<std::uintptr_t>(
+				GetModuleHandleW(nullptr)
+				);
+
+
+		const std::uint16_t generation =
+			*reinterpret_cast<
+			const std::uint16_t*>(
+				moduleBase +
+				kEntityGenerationTableRva +
+				entryOffset
+				);
+
+
+		const std::int16_t type =
+			*reinterpret_cast<
+			const std::int16_t*>(
+				moduleBase +
+				kEntityTypeTableRva +
+				entryOffset
+				);
+
+
+		if (generation !=
+			static_cast<std::uint16_t>(
+				handle >> 20
+				))
+		{
+			return 0;
+		}
+
+
+		if (type != 3)
+			return 0;
+
+
+		return
+			*reinterpret_cast<
+			const std::uintptr_t*>(
+				moduleBase +
+				kEntityPointerTableRva +
+				entryOffset
+				);
+	}
+
 	void __fastcall SwayRequestTraceHook(
 		std::uintptr_t combatObject)
 	{
@@ -519,20 +781,54 @@ namespace
 	{
 		const std::uintptr_t previousPlayerObject =
 			g_playerCombatObject.exchange(
-				combatObject
+				combatObject,
+				std::memory_order_acq_rel
 			);
 
 		if (previousPlayerObject != combatObject)
 		{
-			HJ::Logger::Info(
-				std::format(
-					"Captured player combat object from update: 0x{:X}",
-					static_cast<unsigned long long>(
-						combatObject
-						)
-				)
+			g_havePreviousPlayerPosition =
+				false;
+
+			g_playerTransformValid.store(
+				false,
+				std::memory_order_release
 			);
 		}
+
+		//
+		// resolve yagamis entity only resolve when it changes or hasnt been successfully resolved yet
+		//
+
+		if (previousPlayerObject != combatObject ||
+			g_playerEntity.load(
+				std::memory_order_acquire
+			) == 0)
+		{
+			const std::uintptr_t playerEntity =
+				ResolvePlayerEntity(
+					combatObject
+				);
+
+			g_playerEntity.store(
+				playerEntity,
+				std::memory_order_release
+			);
+
+
+			if (playerEntity != 0)
+			{
+				HJ::Logger::Info(
+					std::format(
+						"Captured player entity: 0x{:X}",
+						static_cast<unsigned long long>(
+							playerEntity
+							)
+					)
+				);
+			}
+		}
+
 
 		const std::uint8_t result =
 			g_playerCombatUpdateHook.call<
@@ -549,6 +845,29 @@ namespace
 		{
 			return result;
 		}
+
+		const std::uintptr_t playerEntity =
+			g_playerEntity.load(
+				std::memory_order_acquire
+			);
+
+		if (playerEntity != 0)
+		{
+			if (!UpdatePlayerTransform(
+				playerEntity))
+			{
+				g_playerEntity.store(
+					0,
+					std::memory_order_release
+				);
+
+				g_havePreviousPlayerPosition =
+					false;
+			}
+		}
+
+		HJ::Hooks::FighterCommand::
+			NotifyPlayerCombatUpdate();
 
 		static bool previousPhysicalA = false;
 
@@ -670,6 +989,71 @@ namespace
 
 		return result;
 	}
+}
+
+extern "C" __declspec(dllexport)
+std::uintptr_t HJ_GetPlayerCombatObject()
+{
+	return g_playerCombatObject.load(
+		std::memory_order_acquire
+	);
+}
+
+extern "C" __declspec(dllexport)
+std::uintptr_t HJ_GetPlayerEntity()
+{
+	return g_playerEntity.load(
+		std::memory_order_acquire
+	);
+}
+
+extern "C" __declspec(dllexport)
+bool HJ_GetPlayerTransform(
+	HJPlayerTransform* outTransform)
+{
+	if (outTransform == nullptr)
+		return false;
+
+	if (!g_playerTransformValid.load(
+		std::memory_order_acquire))
+	{
+		return false;
+	}
+
+
+	outTransform->positionX =
+		g_playerPositionX.load(
+			std::memory_order_relaxed
+		);
+
+	outTransform->positionY =
+		g_playerPositionY.load(
+			std::memory_order_relaxed
+		);
+
+	outTransform->positionZ =
+		g_playerPositionZ.load(
+			std::memory_order_relaxed
+		);
+
+
+	outTransform->forwardX =
+		g_playerForwardX.load(
+			std::memory_order_relaxed
+		);
+
+	outTransform->forwardY =
+		g_playerForwardY.load(
+			std::memory_order_relaxed
+		);
+
+	outTransform->forwardZ =
+		g_playerForwardZ.load(
+			std::memory_order_relaxed
+		);
+
+
+	return true;
 }
 
 

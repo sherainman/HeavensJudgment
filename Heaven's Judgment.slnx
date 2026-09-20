@@ -7,5 +7,6 @@
     <File Path=".gitignore" />
     <File Path="README.md" />
   </Folder>
+  <Project Path="../Heaven's Judgment Camera/Heaven's Judgment Camera.vcxproj" Id="e6d7fa4b-796c-4024-9a7b-b833faf8ec6a" />
   <Project Path="Heaven's Judgment.vcxproj" Id="f1db49dd-4de8-4f56-a26a-2671601b8cf4" />
 </Solution>

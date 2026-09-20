@@ -20,6 +20,8 @@ namespace HJ::Hooks::FighterCommand
 
 	void ResetCurrentAttackTracking();
 
+	void NotifyPlayerCombatUpdate();
+
 	bool IsActionOfferActive(
 		HJAction action
 	);

@@ -37,6 +37,15 @@ namespace
 	std::atomic<ULONGLONG> g_traceUntil{ 0 };
 	std::atomic<ULONGLONG> g_traceStartedAt{ 0 };
 	std::atomic<bool> g_lockOnEnabled{ false };
+	std::atomic<ULONGLONG>
+		g_lastPlayerCombatUpdateAt{ 0 };
+
+	std::atomic<bool> g_tackleActive{ false };
+	std::atomic<std::uint64_t> g_tackleSequence{ 0 };
+	std::atomic<ULONGLONG> g_tackleStartedAt{ 0 };
+
+	constexpr ULONGLONG
+		kGameplayInputFreshnessMs = 100;
 
 	constexpr ULONGLONG TraceDurationMs = 2000;
 
@@ -521,6 +530,21 @@ namespace
 		);
 	}
 
+		bool IsGameplayInputActive()
+	{
+		const ULONGLONG last =
+			g_lastPlayerCombatUpdateAt.load();
+
+		if (last == 0)
+			return false;
+
+		const ULONGLONG now =
+			GetTickCount64();
+
+		return now - last <=
+			kGameplayInputFreshnessMs;
+	}
+
 	std::uint64_t __fastcall ControllerTranslateHook(
 		std::uint32_t controllerIndex,
 		std::uint32_t* buttonMask,
@@ -545,6 +569,20 @@ namespace
 			buttonMask == nullptr ||
 			buttonValues == nullptr)
 		{
+			return result;
+		}
+
+		if (!IsGameplayInputActive())
+		{
+			g_previousShoulders = {};
+
+			g_pendingTrigger =
+				PendingTrigger::None;
+
+			g_pendingTriggerStart = 0;
+
+			ClearBufferedHJAction();
+
 			return result;
 		}
 
@@ -1111,10 +1149,49 @@ namespace HJ::Hooks::FighterCommand
 		ClearBufferedHJAction();
 	}
 
+	extern "C"
+		__declspec(dllexport)
+		std::uint64_t HJ_GetTackleSequence()
+	{
+		return g_tackleSequence.load(
+			std::memory_order_acquire
+		);
+	}
+
+	extern "C"
+		__declspec(dllexport)
+		std::uint64_t HJ_GetTackleStartTick()
+	{
+		return g_tackleStartedAt.load(
+			std::memory_order_acquire
+		);
+	}
+
+	extern "C"
+		__declspec(dllexport)
+		bool HJ_IsTackleActive()
+	{
+		return g_tackleActive.load(
+			std::memory_order_acquire
+		);
+	}
+
 	void ResetCurrentAttackTracking()
 	{
 		g_currentAttackCommand.store(0);
 		g_currentAttackContainer.store(0);
+
+		g_tackleActive.store(
+			false,
+			std::memory_order_release
+		);
+	}
+
+	void NotifyPlayerCombatUpdate()
+	{
+		g_lastPlayerCombatUpdateAt.store(
+			GetTickCount64()
+		);
 	}
 
 	bool Initialize()
@@ -1309,6 +1386,27 @@ namespace HJ::Hooks::FighterCommand
 			GetCommandInputAction(
 				packedCommand
 			);
+
+		if (requiredAction == HJAction::Tackle)
+		{
+			const ULONGLONG now =
+				GetTickCount64();
+
+			g_tackleStartedAt.store(
+				now,
+				std::memory_order_relaxed
+			);
+
+			g_tackleSequence.fetch_add(
+				1,
+				std::memory_order_relaxed
+			);
+
+			g_tackleActive.store(
+				true,
+				std::memory_order_release
+			);
+		}
 
 		//
 		// match semantic ibjmput
