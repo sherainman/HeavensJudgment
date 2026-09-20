@@ -14,12 +14,21 @@
 #include <intrin.h>
 #include <sstream>
 #include <atomic>
+#include <string>
+#include <cstring>
+#include <format>
 
 #include <mutex>
 #include <unordered_set>
 
+// i am going to make an effort to comment this.
+// i am going to make an effort to comment this. yadda yadda
+
 namespace
 {
+	using HJAction =
+		HJ::Hooks::FighterCommand::HJAction;
+
 	SafetyHookInline g_checkEligibilityHook{};
 	SafetyHookInline g_namedStateHook{};
 	SafetyHookInline g_controllerTranslateHook{};
@@ -30,6 +39,75 @@ namespace
 	std::atomic<bool> g_lockOnEnabled{ false };
 
 	constexpr ULONGLONG TraceDurationMs = 2000;
+
+	struct BufferedActionState
+	{
+		std::atomic<HJAction> action{
+			HJAction::None
+		};
+
+		std::atomic<HJAction> offeredAction{
+			HJAction::None
+		};
+
+		std::atomic<std::uint64_t> sequence{
+			0
+		};
+
+		std::atomic<ULONGLONG> queuedAt{
+			0
+		};
+
+		std::atomic<ULONGLONG> expiresAt{
+			0
+		};
+
+		std::atomic<bool> transportOn{
+			false
+		};
+
+		std::atomic<std::uint32_t> sourceCommand{
+			0
+		};
+	};
+
+	BufferedActionState g_buffer{};
+
+	std::atomic<std::uint64_t>
+		g_nextBufferSequence{ 0 };
+	std::atomic<std::uint32_t>
+		g_currentAttackCommand{ 0 };
+
+	std::atomic<std::uintptr_t>
+		g_currentAttackContainer{ 0 };
+
+	constexpr ULONGLONG kActionBufferMs =
+		400;
+
+	struct ShoulderState
+	{
+		bool rb = false;
+		bool lb = false;
+		bool rt = false;
+		bool lt = false;
+	};
+
+	ShoulderState g_previousShoulders{};
+
+	enum class PendingTrigger : std::uint8_t
+	{
+		None,
+		RightLeg,
+		LeftLeg
+	};
+
+	PendingTrigger g_pendingTrigger =
+		PendingTrigger::None;
+
+	ULONGLONG g_pendingTriggerStart = 0;
+
+	// triggers wait around 5 frames may need to change if too high
+	constexpr ULONGLONG kTriggerChordWindowMs = 83;
 
 	struct TraceEntry
 	{
@@ -137,6 +215,312 @@ namespace
 		previousFighting = fighting;
 	}
 
+	const char* GetHJActionName(
+		HJAction action)
+	{
+		switch (action)
+		{
+		case HJAction::RightHand:
+			return "RightHand";
+
+		case HJAction::LeftHand:
+			return "LeftHand";
+
+		case HJAction::RightLeg:
+			return "RightLeg";
+
+		case HJAction::LeftLeg:
+			return "LeftLeg";
+
+		case HJAction::Tackle:
+			return "Tackle";
+
+		default:
+			return "None";
+		}
+	}
+
+	HJAction GetCommandInputAction(
+		std::uint32_t packedCommand)
+	{
+		const std::uint32_t key =
+			packedCommand & 0xFFFF;
+
+		if (key != 0x73)
+			return HJAction::None;
+
+		const std::uint32_t variant =
+			packedCommand >> 16;
+
+		switch (variant)
+		{
+			// Right Hand
+		case 0x01: // RH1
+		case 0x02: // RH2
+		case 0x03: // RH3
+		case 0x04: // RH4
+		case 0x12: // RunRH1
+		case 0x13: // RunRH2
+			return HJAction::RightHand;
+
+			// Left Hand
+		case 0x05: // LH1
+		case 0x06: // LH2
+		case 0x07: // LH3
+		case 0x0B: // RK2 -> RK3 uses Triangle
+		case 0x0D: // RH1 -> LH branch
+			return HJAction::LeftHand;
+
+			// Right Leg
+		case 0x09: // RK1
+		case 0x0A: // RK2
+		case 0x0E: // RH1_LH -> RK
+		case 0x11: // RH1 -> RK
+			return HJAction::RightLeg;
+
+			// Left Leg/kicks/kneeswhatever
+		case 0x0C: // LK1
+		case 0x0F: // RH1_LH -> LK
+		case 0x10: // RH1 -> LK
+			return HJAction::LeftLeg;
+
+		case 0x14: // TackleAcquire
+			return HJAction::Tackle;
+
+			//
+			// AUTO TRANSIOTIONS ETCFCC.
+			// LH4, tackle mount/ground pound/etc.
+			//
+		default:
+			return HJAction::None;
+		}
+	}
+
+	void ClearBufferedHJAction()
+	{
+		g_buffer.action.store(
+			HJAction::None
+		);
+
+		g_buffer.offeredAction.store(
+			HJAction::None
+		);
+
+		g_buffer.sourceCommand.store(0);
+		g_buffer.sequence.store(0);
+		g_buffer.queuedAt.store(0);
+		g_buffer.expiresAt.store(0);
+		g_buffer.transportOn.store(false);
+	}
+
+	void QueueHJAction(
+		HJAction action)
+	{
+		if (action == HJAction::None)
+			return;
+
+		const ULONGLONG now =
+			GetTickCount64();
+
+		const std::uint64_t sequence =
+			g_nextBufferSequence.fetch_add(1) + 1;
+
+		const HJAction previousAction =
+			g_buffer.action.load();
+
+		const std::uint64_t previousSequence =
+			g_buffer.sequence.load();
+
+		g_buffer.action.store(
+			action
+		);
+
+		g_buffer.sequence.store(
+			sequence
+		);
+
+		g_buffer.queuedAt.store(
+			now
+		);
+
+		g_buffer.expiresAt.store(
+			now + kActionBufferMs
+		);
+
+		//
+		// first transport update should be ON!!!!!
+		//
+		g_buffer.transportOn.store(
+			false
+		);
+
+		g_buffer.offeredAction.store(
+			HJAction::None
+		);
+
+		g_buffer.sourceCommand.store(
+			g_currentAttackCommand.load()
+		);
+
+		if (previousAction == HJAction::None)
+		{
+			HJ::Logger::Info(
+				std::format(
+					"HJ BUFFER: queued #{} {}",
+					sequence,
+					GetHJActionName(action)
+				)
+			);
+		}
+		else if (previousAction == action)
+		{
+			HJ::Logger::Info(
+				std::format(
+					"HJ BUFFER: refreshed #{} -> #{} {}",
+					previousSequence,
+					sequence,
+					GetHJActionName(action)
+				)
+			);
+		}
+		else
+		{
+			HJ::Logger::Info(
+				std::format(
+					"HJ BUFFER: replaced #{} {} -> #{} {}",
+					previousSequence,
+					GetHJActionName(previousAction),
+					sequence,
+					GetHJActionName(action)
+				)
+			);
+		}
+	}
+
+	void EmitHJAction(
+		HJAction action,
+		std::uint32_t* buttonMask,
+		std::uint8_t* buttonValues)
+	{
+		if (!buttonMask || !buttonValues)
+			return;
+
+		switch (action)
+		{
+		case HJAction::RightHand:
+			// virtual R1 Token
+			*buttonMask |= 0x80;
+			buttonValues[0] = 0xFF;
+			break;
+
+		case HJAction::LeftHand:
+			// virtual Triangle
+			*buttonMask |= 0x08;
+			buttonValues[3] = 0xFF;
+			break;
+
+		case HJAction::RightLeg:
+			// virtual Square
+			*buttonMask |= 0x04;
+			buttonValues[2] = 0xFF;
+			break;
+
+		case HJAction::LeftLeg:
+			// virtual L2 transport token
+			*buttonMask |= 0x10;
+			buttonValues[4] = 0xFF;
+			break;
+
+		case HJAction::Tackle:
+			// virtual Circle
+			*buttonMask |= 0x02;
+			buttonValues[1] = 0xFF;
+			break;
+
+		default:
+			break;
+
+		}
+	}
+
+	void UpdateBufferedHJAction(
+		std::uint32_t* buttonMask,
+		std::uint8_t* buttonValues)
+	{
+		const HJAction action =
+			g_buffer.action.load();
+
+		if (action == HJAction::None)
+		{
+			g_buffer.offeredAction.store(
+				HJAction::None
+			);
+
+			return;
+		}
+
+		const ULONGLONG now =
+			GetTickCount64();
+
+		const ULONGLONG expiresAt =
+			g_buffer.expiresAt.load();
+
+		if (now > expiresAt)
+		{
+			const std::uint64_t sequence =
+				g_buffer.sequence.load();
+
+			const ULONGLONG queuedAt =
+				g_buffer.queuedAt.load();
+
+			const ULONGLONG age =
+				now >= queuedAt
+				? now - queuedAt
+				: 0;
+
+			HJ::Logger::Info(
+				std::format(
+					"HJ BUFFER: expired #{} {} age={}ms",
+					sequence,
+					GetHJActionName(action),
+					age
+				)
+			);
+
+			ClearBufferedHJAction();
+
+			return;
+		}
+
+		//
+		// pretty much type 1 transport on off ob off on off yaddayafda
+		const bool pulseOn =
+			!g_buffer.transportOn.load();
+
+		g_buffer.transportOn.store(
+			pulseOn
+		);
+
+		if (!pulseOn)
+		{
+			g_buffer.offeredAction.store(
+				HJAction::None
+			);
+
+			return;
+		}
+
+		EmitHJAction(
+			action,
+			buttonMask,
+			buttonValues
+		);
+
+		g_buffer.offeredAction.store(
+			action
+		);
+	}
+
 	std::uint64_t __fastcall ControllerTranslateHook(
 		std::uint32_t controllerIndex,
 		std::uint32_t* buttonMask,
@@ -169,6 +553,15 @@ namespace
 		if (!HJ::Engine::TryGetFightingState(fighting) ||
 			!fighting)
 		{
+			g_previousShoulders = {};
+
+			g_pendingTrigger =
+				PendingTrigger::None;
+
+			g_pendingTriggerStart = 0;
+
+			ClearBufferedHJAction();
+
 			return result;
 		}
 
@@ -176,39 +569,196 @@ namespace
 
 		if (XInputGetState(0, &state) != ERROR_SUCCESS)
 		{
+			g_previousShoulders = {};
+
+			g_pendingTrigger =
+				PendingTrigger::None;
+
+			g_pendingTriggerStart = 0;
+
+			ClearBufferedHJAction();
+
 			return result;
 		}
+
+		const bool physicalRB =
+			(state.Gamepad.wButtons &
+				XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
+
+		const bool physicalLB =
+			(state.Gamepad.wButtons &
+				XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
 
 		const bool physicalRT =
 			state.Gamepad.bRightTrigger >
 			XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
 
-		//
-		// de translator layout
-		// square / x is mask 0x04, values[2]
-		// rt is mask 0x20 values[5]
-		//
-		constexpr std::uint32_t kSquareMask = 0x0004;
-		constexpr std::uint32_t kRTMask = 0x0020;
+		const bool physicalLT =
+			state.Gamepad.bLeftTrigger >
+			XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
 
-		constexpr std::size_t kSquareIndex = 2;
-		constexpr std::size_t kRTIndex = 5;
+		const bool rbPressed =
+			physicalRB &&
+			!g_previousShoulders.rb;
+
+		const bool lbPressed =
+			physicalLB &&
+			!g_previousShoulders.lb;
+
+		const bool rtPressed =
+			physicalRT &&
+			!g_previousShoulders.rt;
+
+		const bool ltPressed =
+			physicalLT &&
+			!g_previousShoulders.lt;
 
 		//
-		// HJ gets rt in combat
-		// removes native rt from the translated state
+		// HJ owns the phys shoulder buttons
 		//
-		*buttonMask &= ~kRTMask;
-		buttonValues[kRTIndex] = 0;
+		constexpr std::uint32_t kLTMask = 0x10;
+		constexpr std::uint32_t kRTMask = 0x20;
+		constexpr std::uint32_t kLBMask = 0x40;
+		constexpr std::uint32_t kRBMask = 0x80;
+
+		*buttonMask &= ~(
+			kLTMask |
+			kRTMask |
+			kLBMask |
+			kRBMask
+			);
+
+		buttonValues[4] = 0; // LT
+		buttonValues[5] = 0; // RT
+		buttonValues[6] = 0; // LB
+		buttonValues[7] = 0; // RB
 
 		//
-		// rt token becomes fightercommands temp square token.
+		// Hands. ;)
 		//
-		if (physicalRT)
+		if (rbPressed)
 		{
-			*buttonMask |= kSquareMask;
-			buttonValues[kSquareIndex] = 0xFF;
+			QueueHJAction(
+				HJAction::RightHand
+			);
 		}
+
+		if (lbPressed)
+		{
+			QueueHJAction(
+				HJAction::LeftHand
+			);
+		}
+
+		//
+		// Legs / tackle.
+		//
+		// 
+		//
+		// both triggers need to cross the threshold during the same input for tackle 
+		//
+		const ULONGLONG now =
+			GetTickCount64();
+
+		//
+		// both pressed on ssame update
+		//
+		if (rtPressed && ltPressed)
+		{
+			g_pendingTrigger =
+				PendingTrigger::None;
+
+			QueueHJAction(
+				HJAction::Tackle
+			);
+		}
+		//
+		// trigger is waiting next trigger comes during the grace window
+		//
+		else if (
+			g_pendingTrigger ==
+			PendingTrigger::RightLeg &&
+			ltPressed)
+		{
+			g_pendingTrigger =
+				PendingTrigger::None;
+
+			QueueHJAction(
+				HJAction::Tackle
+			);
+		}
+		else if (
+			g_pendingTrigger ==
+			PendingTrigger::LeftLeg &&
+			rtPressed)
+		{
+			g_pendingTrigger =
+				PendingTrigger::None;
+
+			QueueHJAction(
+				HJAction::Tackle
+			);
+		}
+		//
+		// starts waiting for the chord.,
+		//
+		else if (
+			rtPressed &&
+			g_pendingTrigger ==
+			PendingTrigger::None)
+		{
+			g_pendingTrigger =
+				PendingTrigger::RightLeg;
+
+			g_pendingTriggerStart = now;
+		}
+		else if (
+			ltPressed &&
+			g_pendingTrigger ==
+			PendingTrigger::None)
+		{
+			g_pendingTrigger =
+				PendingTrigger::LeftLeg;
+
+			g_pendingTriggerStart = now;
+		}
+
+		//
+		// no 2nd trigger :(
+		// play the kick action leg
+		//
+		if (g_pendingTrigger !=
+			PendingTrigger::None &&
+			now - g_pendingTriggerStart >=
+			kTriggerChordWindowMs)
+		{
+			if (g_pendingTrigger ==
+				PendingTrigger::RightLeg)
+			{
+				QueueHJAction(
+					HJAction::RightLeg
+				);
+			}
+			else
+			{
+				QueueHJAction(
+					HJAction::LeftLeg
+				);
+			}
+
+			g_pendingTrigger =
+				PendingTrigger::None;
+		}
+
+		UpdateBufferedHJAction(
+			buttonMask,
+			buttonValues
+		);
+
+		g_previousShoulders.rb = physicalRB;
+		g_previousShoulders.lb = physicalLB;
+		g_previousShoulders.rt = physicalRT;
+		g_previousShoulders.lt = physicalLT;
 
 		return result;
 	}
@@ -277,20 +827,7 @@ namespace
 		}
 
 		//
-		// A / Cross -> Evade
-		//
-
-		if (currentA && !previousA)
-		{
-			HJ::Logger::Info(
-				"HJ INPUT: A / Cross -> Evade"
-			);
-
-			HJ::Hooks::ActionRequest::RequestEvade();
-		}
-
-		//
-		// R3 -> toggle HJ guided lock on
+		// r3 going to eventually be a toggle lock on
 		//
 
 		if (currentR3 && !previousR3)
@@ -368,6 +905,36 @@ namespace
 			reinterpret_cast<std::uintptr_t>(
 				_ReturnAddress()
 				);
+
+		if (stateName != nullptr &&
+			std::strcmp(stateName, "WaitKamae") == 0 &&
+			stateContainer ==
+			g_currentAttackContainer.load())
+		{
+			const std::uint32_t endingCommand =
+				g_currentAttackCommand.exchange(0);
+
+			g_currentAttackContainer.store(0);
+
+			if (endingCommand != 0)
+			{
+				const std::uint32_t sourceCommand =
+					g_buffer.sourceCommand.load();
+
+				if (sourceCommand == endingCommand)
+				{
+					HJ::Hooks::FighterCommand::
+						CancelBufferedAction();
+				}
+
+				HJ::Logger::Info(
+					std::format(
+						"HJ ATTACK END: command=0x{:X}",
+						endingCommand
+					)
+				);
+			}
+		}
 
 		if (IsTraceActive())
 		{
@@ -521,6 +1088,35 @@ namespace
 
 namespace HJ::Hooks::FighterCommand
 {
+
+	void CancelBufferedAction()
+	{
+		const HJAction action =
+			g_buffer.action.load();
+
+		if (action == HJAction::None)
+			return;
+
+		const std::uint64_t sequence =
+			g_buffer.sequence.load();
+
+		HJ::Logger::Info(
+			std::format(
+				"HJ BUFFER: cancelled #{} {}",
+				sequence,
+				GetHJActionName(action)
+			)
+		);
+
+		ClearBufferedHJAction();
+	}
+
+	void ResetCurrentAttackTracking()
+	{
+		g_currentAttackCommand.store(0);
+		g_currentAttackContainer.store(0);
+	}
+
 	bool Initialize()
 	{
 		const HMODULE gameModule =
@@ -563,6 +1159,9 @@ namespace HJ::Hooks::FighterCommand
 		//
 		constexpr std::uintptr_t NamedStateRva =
 			0x003B43D0;
+
+		constexpr std::uintptr_t RuntimeBitConditionRva =
+			0x02C1B930;
 
 		const auto target =
 			base + CheckEligibilityRva;
@@ -637,7 +1236,6 @@ namespace HJ::Hooks::FighterCommand
 				stream.str()
 			);
 		}
-
 		g_controllerTranslateHook =
 			safetyhook::create_inline(
 				reinterpret_cast<void*>(
@@ -683,5 +1281,91 @@ namespace HJ::Hooks::FighterCommand
 		CloseHandle(traceThread);
 
 		return true;
+	}
+
+	bool IsActionOfferActive(
+		HJAction action)
+	{
+		return
+			action != HJAction::None &&
+			g_buffer.offeredAction.load() ==
+			action;
+	}
+
+	void NotifyAttackAccepted(
+		std::uintptr_t container,
+		std::uint32_t packedCommand)
+	{
+		const std::uint32_t previousAttack =
+			g_currentAttackCommand.load();
+
+		const std::uint32_t sourceCommand =
+			g_buffer.sourceCommand.load();
+
+		const HJAction action =
+			g_buffer.action.load();
+
+		const HJAction requiredAction =
+			GetCommandInputAction(
+				packedCommand
+			);
+
+		//
+		// match semantic ibjmput
+		// this command legitimately consumed the buffer.
+		//
+		if (action != HJAction::None &&
+			requiredAction != HJAction::None &&
+			requiredAction == action)
+		{
+			const std::uint64_t sequence =
+				g_buffer.sequence.load();
+
+			const ULONGLONG now =
+				GetTickCount64();
+
+			const ULONGLONG queuedAt =
+				g_buffer.queuedAt.load();
+
+			const ULONGLONG age =
+				now >= queuedAt
+				? now - queuedAt
+				: 0;
+
+			HJ::Logger::Info(
+				std::format(
+					"HJ BUFFER: consumed #{} {} "
+					"command=0x{:X} age={}ms",
+					sequence,
+					GetHJActionName(action),
+					packedCommand,
+					age
+				)
+			);
+
+			ClearBufferedHJAction();
+		}
+
+		//
+		// diff attack starteed before buffer belonging to prev attack was consumend
+		//
+		else if (
+			action != HJAction::None &&
+			sourceCommand != 0 &&
+			sourceCommand == previousAttack)
+		{
+			CancelBufferedAction();
+		}
+
+		//
+		// ALWAYS track new accepted attack including auto transitions yaddayadda
+		//
+		g_currentAttackCommand.store(
+			packedCommand
+		);
+
+		g_currentAttackContainer.store(
+			container
+		);
 	}
 }
