@@ -7,19 +7,34 @@ The closeness of how this will actually end up to STH's combat is unknown since 
 
 ## Current Status
 
-Insanely EARLY development.
+Very EARLY development.
 
 ## Currently implemented
 
-- Native ASI runtime for Lost Judgment, with SRMM
-- Runtime combat command interception
-- Direct game-thread attack invocation
-- Custom controller attack mapping
-- Cross-style attack execution without modifying any animation files (will probably create a moveset in the future just for combo/accuracy's sake)
-- Support for Snake, Crane, Tiger and Boxer combat commands
-- Basic combat tracing/debug logging
-- Runtime state tracing for attacks and combat states
-- Uses DE's existing animation/damage/combat Fighter_Command.cfc as the backend 
+- Native ASI runtime for Lost Judgment, loaded through SRMM
+- Hooks into DE's combat/Fighter_Command at runtime
+- Custom controller layout
+  - RB - Right Hand
+  - LB - Left Hand
+  - RT - Right Leg
+  - LT - Left Leg
+  - A - Evade
+  - LT + RT - Tackle
+- Custom input buffering for attacks
+- Hand/leg combo routes and branching between them
+- Running attacks
+- Trigger chord handling so RT/LT can still be used as kicks while LT + RT is tackle
+- Direct native evade requests instead of forcing evade through Fighter_Command
+- Stops some vanilla inputs/actions from leaking into HJ's controls
+- Cross-style move execution without needing to edit animation files
+- Runtime attack tracking
+- Basic attack steering/commitment stuff on RH1
+- Player combat object/entity tracking
+- Player position/movement direction tracking
+- Vanilla style switching blocked
+- Combat tracing/debug logging
+- Runtime tracing for Fighter_Command checks, attacks and combat states
+- Still uses DE's own Fighter_Command.cfc, animations, damage and combat backend
 
 ## Planned architecture
 
@@ -27,7 +42,7 @@ Insanely EARLY development.
 - 'Engine/' - DE interface
 - 'Hooks/' - runtime hooks
 - 'Combat/' - the custom combat system
-- 'external/ - safetyhook / any third-party dependencies 
+- 'external/' - safetyhook / any third-party dependencies 
 
 ## Requirements
 
