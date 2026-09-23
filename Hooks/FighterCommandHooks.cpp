@@ -90,6 +90,16 @@ namespace
 	std::atomic<std::uintptr_t>
 		g_currentAttackContainer{ 0 };
 
+
+	// test for attack steering / commitment
+
+	std::atomic<ULONGLONG>
+		g_currentAttackStartedAt{ 0 };
+
+	constexpr std::uint32_t kHJRightHand1 =
+		0x00010073;
+
+
 	constexpr ULONGLONG kActionBufferMs =
 		400;
 
@@ -418,9 +428,9 @@ namespace
 		{
 		case HJAction::RightHand:
 			// virtual R1 Token
-			*buttonMask |= 0x80;
-			buttonValues[0] = 0xFF;
-			break;
+			*buttonMask |= 0x20;
+			 buttonValues[5] = 0xFF; 
+			break; 
 
 		case HJAction::LeftHand:
 			// virtual Triangle
@@ -545,6 +555,36 @@ namespace
 			kGameplayInputFreshnessMs;
 	}
 
+		// attempting to add attack steering and commitment layers to lj
+
+		float GetRH1SteeringAuthority(
+			ULONGLONG elapsedMs)
+		{
+			constexpr ULONGLONG kFreeSteerUntilMs = 100;
+			constexpr ULONGLONG kFullyCommittedAtMs = 320;
+
+			if (elapsedMs <= kFreeSteerUntilMs)
+				return 1.0f;
+
+			if (elapsedMs >= kFullyCommittedAtMs)
+				return 0.0f;
+
+			const float t =
+				static_cast<float>(
+					elapsedMs - kFreeSteerUntilMs
+					) /
+				static_cast<float>(
+					kFullyCommittedAtMs -
+					kFreeSteerUntilMs
+					);
+
+			// smooth 1 -> 0
+			const float smooth =
+				t * t * (3.0f - 2.0f * t);
+
+			return 1.0f - smooth;
+		}
+
 	std::uint64_t __fastcall ControllerTranslateHook(
 		std::uint32_t controllerIndex,
 		std::uint32_t* buttonMask,
@@ -618,6 +658,46 @@ namespace
 
 			return result;
 		}
+
+		//
+		// RH1 steering prototype
+		//
+		if (leftStickX != nullptr &&
+			leftStickY != nullptr)
+		{
+			const std::uint32_t currentAttack =
+				g_currentAttackCommand.load(
+					std::memory_order_acquire
+				);
+
+			if (currentAttack == kHJRightHand1)
+			{
+				const ULONGLONG startedAt =
+					g_currentAttackStartedAt.load(
+						std::memory_order_acquire
+					);
+
+				if (startedAt != 0)
+				{
+					const ULONGLONG now =
+						GetTickCount64();
+
+					const ULONGLONG elapsed =
+						now >= startedAt
+						? now - startedAt
+						: 0;
+
+					const float authority =
+						GetRH1SteeringAuthority(
+							elapsed
+						);
+
+					*leftStickX *= authority;
+					*leftStickY *= authority;
+				}
+			}
+		}
+
 
 		const bool physicalRB =
 			(state.Gamepad.wButtons &
@@ -954,6 +1034,11 @@ namespace
 
 			g_currentAttackContainer.store(0);
 
+			g_currentAttackStartedAt.store(
+				0,
+				std::memory_order_release
+			);
+
 			if (endingCommand != 0)
 			{
 				const std::uint32_t sourceCommand =
@@ -1180,6 +1265,11 @@ namespace HJ::Hooks::FighterCommand
 	{
 		g_currentAttackCommand.store(0);
 		g_currentAttackContainer.store(0);
+
+		g_currentAttackStartedAt.store(
+			0,
+			std::memory_order_release
+		);
 
 		g_tackleActive.store(
 			false,
@@ -1465,5 +1555,17 @@ namespace HJ::Hooks::FighterCommand
 		g_currentAttackContainer.store(
 			container
 		);
+
+		g_currentAttackStartedAt.store(
+			GetTickCount64(),
+			std::memory_order_release
+		);
+
+		if (packedCommand == kHJRightHand1)
+		{
+			HJ::Logger::Info(
+				"HJ RH1 COMMITMENT TEST: attack started"
+			);
+		}
 	}
 }

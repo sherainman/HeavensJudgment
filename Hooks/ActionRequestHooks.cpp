@@ -35,6 +35,19 @@ namespace
 
 	SafetyHookInline g_swayRequestHook{};
 
+	SafetyHookInline g_styleChangeHook{};
+
+	constexpr std::uint32_t kBoxerStyleId = 1;
+
+	constexpr std::uintptr_t kRuntimeStateGlobalRva =
+		0x0430BE48;
+
+	constexpr std::uintptr_t kCurrentStyleOffset =
+		0x68;
+
+	std::atomic<std::uintptr_t>
+		g_boxerInitializedObject{ 0 };
+
 	std::atomic<bool> g_pendingEvade{ false };
 
 	std::atomic<std::uintptr_t>
@@ -54,12 +67,6 @@ namespace
 
 	constexpr std::uint32_t kSnakeVanillaGrab =
 		0x002A0040;
-
-	constexpr std::uintptr_t kCombatStyleOffset =
-		0x2B8;
-
-	constexpr std::uint8_t kBoxerCombatStyle =
-		5;
 
 	std::atomic<std::uintptr_t> g_playerEntity{ 0 };
 
@@ -430,53 +437,256 @@ namespace
 	return outStateRoot != 0;
 }
 
-	void ForceBoxerStyle(
-		std::uintptr_t combatObject)
+	// slef explanatory...
+
+	bool NopCode(
+		std::uintptr_t address,
+		std::size_t size)
 	{
-		if (combatObject == 0)
-			return;
+		DWORD oldProtect = 0;
 
-		const std::uintptr_t styleAddress =
-			combatObject + kCombatStyleOffset;
-
-		std::uint8_t currentStyle = 0;
-
-		if (!SafeReadByte(
-			styleAddress,
-			currentStyle))
+		if (!VirtualProtect(
+			reinterpret_cast<void*>(address),
+			size,
+			PAGE_EXECUTE_READWRITE,
+			&oldProtect))
 		{
-			return;
+			return false;
 		}
 
-		//
-		// Known Lost Judgment Yagami style values:
-		//
-		// refuse to write if it doesnt look like the expected combat object
-		// tiger = 2, crane = 3, snake = 4, boxer = 5
+		std::memset(
+			reinterpret_cast<void*>(address),
+			0x90,
+			size
+		);
 
-		if (currentStyle < 2 ||
-			currentStyle > 5)
+		FlushInstructionCache(
+			GetCurrentProcess(),
+			reinterpret_cast<void*>(address),
+			size
+		);
+
+		DWORD unused = 0;
+
+		VirtualProtect(
+			reinterpret_cast<void*>(address),
+			size,
+			oldProtect,
+			&unused
+		);
+
+		return true;
+	}
+
+
+
+	bool PatchBoxerAvailability(
+		std::uintptr_t base)
+	{
+		const std::uintptr_t boxerCheck =
+			base + 0x02EA0810;
+
+		const std::uint8_t expected[] =
 		{
-			return;
+			0x48, 0x89, 0x5C, 0x24, 0x10,
+			0x56,
+			0x48, 0x83, 0xEC, 0x40,
+			0xB9, 0x49, 0x12, 0x00, 0x00,
+			0xE8
+		};
+
+		if (std::memcmp(
+			reinterpret_cast<void*>(boxerCheck),
+			expected,
+			sizeof(expected)) != 0)
+		{
+			HJ::Logger::Error(
+				"boxer availability bytes dont match"
+			);
+
+			return false;
 		}
 
-		if (currentStyle == kBoxerCombatStyle)
-			return;
-
-		if (!SafeWriteByte(
-			styleAddress,
-			kBoxerCombatStyle))
+		if (!NopCode(
+			boxerCheck + 0x16,
+			6))
 		{
-			return;
+			return false;
+		}
+
+		if (!NopCode(
+			boxerCheck + 0x27,
+			6))
+		{
+			return false;
+		}
+
+		if (!NopCode(
+			boxerCheck + 0x43,
+			6))
+		{
+			return false;
 		}
 
 		HJ::Logger::Info(
-			std::format(
-				"HJ STYLE FORCE: {} -> Boxer (5)",
-				static_cast<unsigned int>(
-					currentStyle
-					)
-			)
+			"boxer availability patched"
+		);
+
+		return true;
+	}
+
+	bool ForceBoxerStyleState()
+	{
+		const auto base =
+			reinterpret_cast<std::uintptr_t>(
+				GetModuleHandleW(nullptr)
+				);
+
+		if (base == 0)
+			return false;
+
+		std::uintptr_t runtimeState = 0;
+
+		__try
+		{
+			runtimeState =
+				*reinterpret_cast<std::uintptr_t*>(
+					base +
+					kRuntimeStateGlobalRva
+					);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+
+		if (runtimeState == 0)
+			return false;
+
+		__try
+		{
+			auto* style =
+				reinterpret_cast<std::uint32_t*>(
+					runtimeState +
+					kCurrentStyleOffset
+					);
+
+			const std::uint32_t current =
+				*style;
+
+			// dont touch garbage/loading state
+			if (current < 1 ||
+				current > 4)
+			{
+				return false;
+			}
+
+			*style =
+				kBoxerStyleId;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+
+		return true;
+	}
+
+	void __fastcall StyleChangeHook(
+		std::uintptr_t owner,
+		std::uint32_t requestedStyleId)
+	{
+		const std::uintptr_t playerObject =
+			g_playerCombatObject.load(
+				std::memory_order_acquire
+			);
+
+		if (playerObject == 0 ||
+			owner != playerObject)
+		{
+			g_styleChangeHook.call<void>(
+				owner,
+				requestedStyleId
+			);
+
+			return;
+		}
+
+		if (requestedStyleId !=
+			kBoxerStyleId)
+		{
+			//
+			// caller already changed +68 before getting here
+			// put it back and eat the stylechange (nom)
+			//
+			ForceBoxerStyleState();
+
+			HJ::Logger::Info(
+				std::format(
+					"HJ STYLE: blocked {}",
+					requestedStyleId
+				)
+			);
+
+			return;
+		}
+
+		g_styleChangeHook.call<void>(
+			owner,
+			kBoxerStyleId
+		);
+	}
+
+	void TryInitializeBoxerStyle(
+		std::uintptr_t combatObject)
+	{
+		if (combatObject == 0 ||
+			!g_styleChangeHook)
+		{
+			return;
+		}
+
+		if (g_playerEntity.load(
+			std::memory_order_acquire
+		) == 0)
+		{
+			return;
+		}
+
+		//
+		// do this even outside combat so loading a save
+		// already has boxer as current style
+		//
+		if (!ForceBoxerStyleState())
+			return;
+
+		const std::uintptr_t initializedObject =
+			g_boxerInitializedObject.load(
+				std::memory_order_acquire
+			);
+
+		if (initializedObject ==
+			combatObject)
+		{
+			return;
+		}
+
+		g_boxerInitializedObject.store(
+			combatObject,
+			std::memory_order_release
+		);
+
+		HJ::Logger::Info(
+			"HJ STYLE: setting initial boxer"
+		);
+
+		//
+		// run one real boxer StyleChange so the actual
+		// fighter state gets initialized too
+		//
+		g_styleChangeHook.call<void>(
+			combatObject,
+			kBoxerStyleId
 		);
 	}
 
@@ -846,6 +1056,8 @@ namespace
 			return result;
 		}
 
+		ForceBoxerStyleState();
+
 		const std::uintptr_t playerEntity =
 			g_playerEntity.load(
 				std::memory_order_acquire
@@ -986,6 +1198,10 @@ namespace
 
 			return result;
 		}
+
+		TryInitializeBoxerStyle(
+			combatObject
+		);
 
 		return result;
 	}
@@ -1140,7 +1356,15 @@ namespace HJ::Hooks::ActionRequest
 				);
 
 		
+		if (!PatchBoxerAvailability(
+			base))
+		{
+			Logger::Error(
+				"failed to patch boxer availability"
+			);
 
+			return false;
+		}
 
 
 		// StartAttackBehaviorFromPackedCommand
