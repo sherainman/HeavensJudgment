@@ -73,20 +73,20 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <TargetName>HeavensJudgment</TargetName>
     <TargetExt>.asi</TargetExt>
-    <OutDir>A:\SteamLibrary\steamapps\common\Lost Judgment\runtime\media\mods\HeavensJudgment</OutDir>
+    <OutDir>A:\SteamLibrary\steamapps\common\Lost Judgment\runtime\media\mods\HeavensJudgment\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <TargetName>HeavensJudgment</TargetName>
     <TargetExt>.asi</TargetExt>
-    <OutDir>A:\SteamLibrary\steamapps\common\Lost Judgment\runtime\media\mods\HeavensJudgment</OutDir>
+    <OutDir>A:\SteamLibrary\steamapps\common\Lost Judgment\runtime\media\mods\HeavensJudgment\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <TargetExt>.asi</TargetExt>
-    <OutDir>A:\SteamLibrary\steamapps\common\Lost Judgment\runtime\media\mods\HeavensJudgment</OutDir>
+    <OutDir>A:\SteamLibrary\steamapps\common\Lost Judgment\runtime\media\mods\HeavensJudgment\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <TargetExt>.asi</TargetExt>
-    <OutDir>A:\SteamLibrary\steamapps\common\Lost Judgment\runtime\media\mods\HeavensJudgment</OutDir>
+    <OutDir>A:\SteamLibrary\steamapps\common\Lost Judgment\runtime\media\mods\HeavensJudgment\</OutDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -180,6 +180,10 @@
     <ClInclude Include="Core\PatternScanner.hpp" />
     <ClInclude Include="Engine\Engine.hpp" />
     <ClInclude Include="HeavensJudgment.hpp" />
+    <ClInclude Include="HUD\BoxingGaugeTrace.hpp" />
+    <ClInclude Include="HUD\RadialHealthBridge.hpp" />
+    <ClInclude Include="HUD\RadialDisc.hpp" />
+    <ClInclude Include="HUD\RadialDiscDrive.hpp" />
     <ClInclude Include="external\safetyhook\safetyhook.hpp" />
     <ClInclude Include="external\safetyhook\Zydis.h" />
     <ClInclude Include="Hooks\ActionRequestsHooks.hpp" />
@@ -193,6 +197,10 @@
     <ClCompile Include="Engine\Engine.cpp" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="HeavensJudgment.cpp" />
+    <ClCompile Include="HUD\BoxingGaugeTrace.cpp" />
+    <ClCompile Include="HUD\RadialHealthBridge.cpp" />
+    <ClCompile Include="HUD\RadialDisc.cpp" />
+    <ClCompile Include="HUD\RadialDiscDrive.cpp" />
     <ClCompile Include="external\safetyhook\safetyhook.cpp" />
     <ClCompile Include="external\safetyhook\Zydis.c" />
     <ClCompile Include="Hooks\ActionRequestHooks.cpp" />

@@ -43,6 +43,10 @@ namespace HJ::Hooks::ActionRequest
 
 	void EnableLightToHeavyTest();
 
+	void NotifyEvadeAccepted(
+		std::uintptr_t stateContainer
+	);
+
 	bool RequestEvade();
 
 	bool RequestAttack(

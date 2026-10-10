@@ -26,6 +26,8 @@ namespace HJ::Hooks::FighterCommand
 		HJAction action
 	);
 
+	bool IsRightHandTransportActive();
+
 	void NotifyAttackAccepted(
 		std::uintptr_t container,
 		std::uint32_t packedCommand

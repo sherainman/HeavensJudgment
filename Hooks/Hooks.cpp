@@ -3,6 +3,8 @@
 #include "FighterCommandHooks.hpp"
 #include "ActionRequestsHooks.hpp"
 
+#include "../HUD/RadialHealthBridge.hpp"
+#include "../HUD/BoxingGaugeTrace.hpp"
 #include "../Core/Logger.hpp"
 
 namespace HJ::Hooks
@@ -18,6 +20,20 @@ namespace HJ::Hooks
 			);
 
 			return false;
+		}
+
+		if (!HJ::HUD::RadialHealthBridge::Initialize())
+		{
+			Logger::Warning(
+				"Radial health bridge didn initialize."
+			);
+		}
+
+		if (!HJ::HUD::BoxingGaugeTrace::Initialize())
+		{
+			Logger::Warning(
+				"Boxing gauge trace didn initialize."
+			);
 		}
 
 		if (!ActionRequest::Initialize())

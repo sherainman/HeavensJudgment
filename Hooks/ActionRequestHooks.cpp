@@ -1,6 +1,7 @@
 #include "ActionRequestsHooks.hpp"
 #include "../Combat/CombatSystem.hpp"
 #include "FighterCommandHooks.hpp"
+#include "../HUD/RadialDisc.hpp"
 
 #include "../Core/Logger.hpp"
 
@@ -34,6 +35,7 @@ namespace
 	SafetyHookInline g_playerCombatUpdateHook{};
 
 	SafetyHookInline g_swayRequestHook{};
+	SafetyHookMid g_exBoostInputHook{};
 
 	SafetyHookInline g_styleChangeHook{};
 
@@ -49,6 +51,12 @@ namespace
 		g_boxerInitializedObject{ 0 };
 
 	std::atomic<bool> g_pendingEvade{ false };
+
+	std::atomic<std::uintptr_t>
+		g_evadeRequestObject{ 0 };
+
+	std::atomic<std::uint64_t>
+		g_evadeAcceptedSequence{ 0 };
 
 	std::atomic<std::uintptr_t>
 		g_playerCombatObject{ 0 };
@@ -105,16 +113,16 @@ namespace
 	// 
 	// HJ_RightLeg_1
 	// 
-	// Boxer table variant 0xD5, style key 0x73
+	// Boxer table variant 0x09, style key 0x73
 	//
 	constexpr std::uint32_t kHJRightLeg1 =
-		0x00D50073;
+		0x00090073;
 
 	// the tackle
 	// boxer and style key 0x73
 
 	constexpr std::uint32_t kHJTackleAcquire =
-		0x00DC0073;
+		0x00160073;
 
 	void __fastcall AttackBehaviorHook(
 		std::uintptr_t container,
@@ -149,7 +157,9 @@ namespace
 				input.Gamepad.bRightTrigger >
 				XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
 
-			if (!physicalRT)
+			if (!physicalRT &&
+				!HJ::Hooks::FighterCommand::IsActionOfferActive(
+					HJ::Hooks::FighterCommand::HJAction::RightLeg))
 			{
 				HJ::Logger::Info(
 					"HJ RIGHT LEG: physical Square route suppressed"
@@ -184,7 +194,9 @@ namespace
 				physicalLT &&
 				physicalRT;
 
-			if (!physicalTackleChord)
+			if (!physicalTackleChord &&
+				!HJ::Hooks::FighterCommand::IsActionOfferActive(
+					HJ::Hooks::FighterCommand::HJAction::Tackle))
 			{
 				HJ::Logger::Info(
 					"HJ TACKLE: non-trigger-chord route suppressed"
@@ -263,39 +275,6 @@ namespace
 		}
 	}
 
-	bool ProbeNativeEvadeEligibility(
-		std::uintptr_t combatObject)
-	{
-		if (combatObject == 0)
-			return false;
-
-		const auto vtable =
-			*reinterpret_cast<const std::uintptr_t*>(
-				combatObject
-				);
-
-		if (vtable == 0)
-			return false;
-
-		using EligibilityFn =
-			std::uint8_t(__fastcall*)(
-				std::uintptr_t,
-				std::uint32_t
-				);
-
-		const auto eligibility =
-			*reinterpret_cast<EligibilityFn const*>(
-				vtable + 0x208
-				);
-
-		if (eligibility == nullptr)
-			return false;
-
-		return eligibility(
-			combatObject,
-			1
-		) != 0;
-	}
 
 	bool SafeReadByte(
 		std::uintptr_t address,
@@ -352,6 +331,45 @@ namespace
 			value = 0;
 			return false;
 		}
+	}
+
+	bool ProbeNativeEvadeEligibility(
+		std::uintptr_t combatObject)
+	{
+		if (combatObject == 0)
+			return false;
+
+		std::uintptr_t vtable = 0;
+
+		if (!SafeReadPointer(
+			combatObject,
+			vtable) ||
+			vtable == 0)
+			return false;
+
+		using EligibilityFn =
+			std::uint8_t(__fastcall*)(
+				std::uintptr_t,
+				std::uint8_t
+				);
+
+		std::uintptr_t eligibilityAddress = 0;
+
+		if (!SafeReadPointer(
+			vtable + 0x208,
+			eligibilityAddress) ||
+			eligibilityAddress == 0)
+			return false;
+
+		const auto eligibility =
+			reinterpret_cast<EligibilityFn>(
+				eligibilityAddress
+			);
+
+		return eligibility(
+			combatObject,
+			1
+		) != 0;
 	}
 
 	bool TryReadEvadeStateFlag(
@@ -981,9 +999,36 @@ namespace
 			message.c_str()
 		);
 
+		const std::uintptr_t previousRequestObject =
+			g_evadeRequestObject.exchange(
+				isCapturedPlayer ? combatObject : 0,
+				std::memory_order_acq_rel
+			);
+
 		g_swayRequestHook.call<void>(
 			combatObject
 		);
+
+		g_evadeRequestObject.store(
+			previousRequestObject,
+			std::memory_order_release
+		);
+	}
+
+	void ExBoostInputHook(SafetyHookContext& context)
+	{
+		const std::uintptr_t playerObject =
+			g_playerCombatObject.load();
+
+		if (playerObject != 0 &&
+			context.rdi == playerObject &&
+			HJ::Combat::IsInCombat() &&
+			HJ::Hooks::FighterCommand::
+				IsRightHandTransportActive())
+		{
+			// R2 still reaches fighter command, just not EX boost
+			context.rax &= ~std::uintptr_t{ 1 };
+		}
 	}
 
 	std::uint8_t __fastcall PlayerCombatUpdateHook(
@@ -997,6 +1042,13 @@ namespace
 
 		if (previousPlayerObject != combatObject)
 		{
+			g_pendingEvade.store(false);
+
+			HJ::Hooks::FighterCommand::
+				CancelBufferedAction();
+			HJ::Hooks::FighterCommand::
+				ResetCurrentAttackTracking();
+
 			g_havePreviousPlayerPosition =
 				false;
 
@@ -1039,6 +1091,11 @@ namespace
 			}
 		}
 
+
+		const std::uint64_t previousEvadeSequence =
+			g_evadeAcceptedSequence.load(
+				std::memory_order_acquire
+			);
 
 		const std::uint8_t result =
 			g_playerCombatUpdateHook.call<
@@ -1103,15 +1160,15 @@ namespace
 		previousPhysicalA =
 			physicalA;
 
+		const bool nativeEvadeAccepted =
+			g_evadeAcceptedSequence.load(
+				std::memory_order_acquire
+			) != previousEvadeSequence;
+
 		if (physicalAPressed &&
+			!nativeEvadeAccepted &&
 			HJ::Combat::IsInCombat())
 		{
-			HJ::Hooks::FighterCommand::
-				CancelBufferedAction();
-
-			HJ::Hooks::FighterCommand::
-				ResetCurrentAttackTracking();
-
 			g_pendingEvade.store(true);
 
 			HJ::Logger::Info(
@@ -1119,7 +1176,9 @@ namespace
 			);
 		}
 
-		if (g_pendingEvade.exchange(false))
+		if (g_pendingEvade.exchange(false) &&
+			!nativeEvadeAccepted &&
+			HJ::Combat::IsInCombat())
 		{
 			std::uintptr_t stateRoot = 0;
 
@@ -1164,6 +1223,9 @@ namespace
 					hasBA8
 				)
 			);
+
+			// direct A evade also works outside lock-on stance
+			// the PlayerSway callback confirms whether it was accepted
 
 			using HandleSwayRequestFn =
 				void(__fastcall*)(std::uintptr_t);
@@ -1386,6 +1448,10 @@ namespace HJ::Hooks::ActionRequest
 		constexpr std::uintptr_t kSwayRequestRva =
 			0x02F1ED80;
 
+		// native boost input, after reading R2 and before and al, 1
+		constexpr std::uintptr_t kExBoostInputRva =
+			0x02EBFA18;
+
 
 		const auto target =
 			base + AttackBehaviorRva;
@@ -1395,6 +1461,47 @@ namespace HJ::Hooks::ActionRequest
 
 		const auto swayRequestAddress =
 			base + kSwayRequestRva;
+
+		const auto exBoostInputAddress =
+			base + kExBoostInputRva;
+
+		constexpr std::uint8_t exBoostInputBytes[] =
+		{
+			0x0F, 0xB6, 0x81, 0x25, 0x14, 0x00, 0x00,
+			0x24, 0x01, 0x48, 0x83, 0xC4, 0x20,
+			0x5F, 0x5E, 0x5B, 0xC3
+		};
+
+		if (std::memcmp(
+			reinterpret_cast<const void*>(exBoostInputAddress - 7),
+			exBoostInputBytes,
+			sizeof(exBoostInputBytes)) != 0)
+		{
+			Logger::Error(
+				"EX boost input signature does not match."
+			);
+
+			return false;
+		}
+
+		g_exBoostInputHook =
+			safetyhook::create_mid(
+				reinterpret_cast<void*>(exBoostInputAddress),
+				&ExBoostInputHook
+			);
+
+		if (!g_exBoostInputHook)
+		{
+			Logger::Error(
+				"Failed to install EX boost input hook."
+			);
+
+			return false;
+		}
+
+		Logger::Info(
+			"EX boost input hook installed."
+		);
 
 		{
 			std::ostringstream stream;
@@ -1485,6 +1592,39 @@ namespace HJ::Hooks::ActionRequest
 		);
 
 		return true;
+	}
+
+	void NotifyEvadeAccepted(
+		std::uintptr_t stateContainer)
+	{
+		const std::uintptr_t playerObject =
+			g_playerCombatObject.load(
+				std::memory_order_acquire
+			);
+
+		if (playerObject == 0 ||
+			stateContainer != playerObject ||
+			g_evadeRequestObject.load(
+				std::memory_order_acquire
+			) != playerObject)
+		{
+			return;
+		}
+
+		HJ::Hooks::FighterCommand::
+			CancelBufferedAction();
+
+		HJ::Hooks::FighterCommand::
+			ResetCurrentAttackTracking();
+
+		g_evadeAcceptedSequence.fetch_add(
+			1,
+			std::memory_order_acq_rel
+		);
+
+		HJ::Logger::Info(
+			"HJ EVADE ACCEPTED: PlayerSway queued"
+		);
 	}
 
 	bool RequestEvade()
