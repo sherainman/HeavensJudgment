@@ -2,6 +2,7 @@
 
 #include "FighterCommandHooks.hpp"
 #include "ActionRequestsHooks.hpp"
+#include "GuardDirectionHooks.hpp"
 
 #include "../Core/Logger.hpp"
 #include "../Engine/Engine.hpp"
@@ -114,6 +115,14 @@ namespace
 	};
 
 	ShoulderState g_previousShoulders{};
+
+	// analog triggers bounce around the digital threshold on hard
+	// shoulder presses, demand straight frames before believing one
+	constexpr int kTriggerDebounceFrames = 3;
+	int g_rtStableFrames = 0;
+	int g_ltStableFrames = 0;
+	bool g_prevRawRT = false;
+	bool g_prevRawLT = false;
 
 	enum class PendingTrigger : std::uint8_t
 	{
@@ -368,10 +377,8 @@ namespace
 		case 0x16: // TackleAcquire
 			return HJAction::Tackle;
 
-			//
-			// AUTO TRANSIOTIONS ETCFCC.
+			// auto transitions etc.
 			// LH4, tackle mount/ground pound/etc.
-			//
 		default:
 			return HJAction::None;
 		}
@@ -428,9 +435,7 @@ namespace
 			now + kActionBufferMs
 		);
 
-		//
 		// first transport update should be ON!!!!!
-		//
 		g_buffer.transportOn.store(
 			false
 		);
@@ -698,7 +703,6 @@ namespace
 			return;
 		}
 
-		//
 		// pretty much type 1 transport on off ob off on off yaddayafda
 		const bool pulseOn =
 			!g_buffer.transportOn.load();
@@ -821,6 +825,10 @@ namespace
 		if (!IsGameplayInputActive())
 		{
 			g_previousShoulders = {};
+			g_rtStableFrames = 0;
+			g_ltStableFrames = 0;
+			g_prevRawRT = false;
+			g_prevRawLT = false;
 
 			g_pendingTrigger =
 				PendingTrigger::None;
@@ -840,6 +848,10 @@ namespace
 			!fighting)
 		{
 			g_previousShoulders = {};
+			g_rtStableFrames = 0;
+			g_ltStableFrames = 0;
+			g_prevRawRT = false;
+			g_prevRawLT = false;
 
 			g_pendingTrigger =
 				PendingTrigger::None;
@@ -860,6 +872,10 @@ namespace
 		if (XInputGetState(0, &state) != ERROR_SUCCESS)
 		{
 			g_previousShoulders = {};
+			g_rtStableFrames = 0;
+			g_ltStableFrames = 0;
+			g_prevRawRT = false;
+			g_prevRawLT = false;
 
 			g_pendingTrigger =
 				PendingTrigger::None;
@@ -873,9 +889,7 @@ namespace
 			return result;
 		}
 
-		//
 		// RH1 steering prototype
-		//
 		if (leftStickX != nullptr &&
 			leftStickY != nullptr)
 		{
@@ -921,13 +935,45 @@ namespace
 			(state.Gamepad.wButtons &
 				XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
 
-		const bool physicalRT =
+		const bool rawRT =
 			state.Gamepad.bRightTrigger >
 			XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
 
-		const bool physicalLT =
+		const bool rawLT =
 			state.Gamepad.bLeftTrigger >
 			XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+
+		// triggers as buttons need debouncing, a 1-frame flex blip
+		// from an LB/RB slam must never become a kick
+		if (rawRT)
+			++g_rtStableFrames;
+		else
+			g_rtStableFrames = 0;
+
+		if (rawLT)
+			++g_ltStableFrames;
+		else
+			g_ltStableFrames = 0;
+
+		const bool physicalRT =
+			g_rtStableFrames >= kTriggerDebounceFrames;
+
+		const bool physicalLT =
+			g_ltStableFrames >= kTriggerDebounceFrames;
+
+		if (rawRT && !g_prevRawRT && !physicalRT)
+			HJ::Logger::Info("HJ TRIGGER: RT blip swallowed");
+
+		if (rawLT && !g_prevRawLT && !physicalLT)
+			HJ::Logger::Info("HJ TRIGGER: LT blip swallowed");
+
+		g_prevRawRT = rawRT;
+		g_prevRawLT = rawLT;
+
+		// Circle is block, modifiers LB/RB pick side in GuardDirection hook
+		const bool physicalCircle =
+			(state.Gamepad.wButtons &
+				XINPUT_GAMEPAD_B) != 0;
 
 		const bool rbPressed =
 			physicalRB &&
@@ -944,14 +990,13 @@ namespace
 		const bool ltPressed =
 			physicalLT &&
 			!g_previousShoulders.lt;
+
 		if (rbPressed) TraceCadence("physical-RH");
 		if (lbPressed) TraceCadence("physical-LH");
 		if (rtPressed) TraceCadence("physical-RK");
 		if (ltPressed) TraceCadence("physical-LK");
 
-		//
 		// HJ owns the phys shoulder buttons
-		//
 		constexpr std::uint32_t kLTMask = 0x10;
 		constexpr std::uint32_t kRTMask = 0x20;
 		constexpr std::uint32_t kLBMask = 0x40;
@@ -966,8 +1011,74 @@ namespace
 
 		buttonValues[4] = 0; // LT
 		buttonValues[5] = 0; // RT
-		buttonValues[6] = 0; // LB
+		buttonValues[6] = 0; // LB, HJ owns it now so vanilla guard never sees it
 		buttonValues[7] = 0; // RB
+
+		// Circle is the only block button, feeds native guard as virtual L1.
+		static int s_debSide = -1;
+		static int s_debCount = 0;
+		static int s_lastDebSide = -1;
+		static int s_guardPulse = 0;
+		static int s_pulseTimeout = 0;
+
+		if (physicalCircle)
+		{
+			const int guardSide = HJ::Hooks::GuardDirection::CurrentSideId();
+
+			if (guardSide == s_debSide)
+				++s_debCount;
+			else
+			{
+				s_debSide = guardSide;
+				s_debCount = 1;
+			}
+
+			if (s_debCount >= 4)
+			{
+				if (s_debSide != -1 && s_lastDebSide != -1 &&
+					s_debSide != s_lastDebSide &&
+					HJ::Hooks::GuardDirection::kDirectionalBlockEnabled &&
+					HJ::Hooks::GuardDirection::HasGuardCells())
+				{
+					(void)HJ::Hooks::GuardDirection::TakeGuardReentered();
+					s_guardPulse = -1;
+					s_pulseTimeout = 45;
+					HJ::Logger::Info("HJ GUARD: side switch, stance pulse");
+				}
+
+				s_lastDebSide = s_debSide;
+			}
+
+			// -1 waits for a real Guard re-enter, 45-tick fail-safe
+			if (s_guardPulse == -1)
+			{
+				if (HJ::Hooks::GuardDirection::TakeGuardReentered())
+				{
+					s_guardPulse = 0;
+					HJ::Logger::Info("HJ GUARD: pulse re-entered via signal");
+				}
+				else if (--s_pulseTimeout <= 0)
+				{
+					s_guardPulse = 0;
+					HJ::Logger::Info("HJ GUARD: pulse timeout, reasserting");
+				}
+			}
+			else if (s_guardPulse > 0)
+				--s_guardPulse;
+
+			if (s_guardPulse == 0)
+			{
+				*buttonMask |= kLBMask;
+				buttonValues[6] = 0xFF;
+			}
+		}
+		else
+		{
+			s_debSide = -1;
+			s_debCount = 0;
+			s_lastDebSide = -1;
+			s_guardPulse = 0;
+		}
 
 		// a newer hand press replaces any trigger still waiting for its chord
 		if (rbPressed || lbPressed)
@@ -978,30 +1089,24 @@ namespace
 			g_pendingTriggerCancelSequence = 0;
 		}
 
-		//
-		// Hands. ;)
-		//
-		if (rbPressed)
+		// hands.
+		// LB/RB + Circle are block modifiers, not punches
+		if (rbPressed && !physicalLB && !physicalCircle)
 		{
 			QueueHJAction(
 				HJAction::RightHand
 			);
 		}
 
-		if (lbPressed)
+		if (lbPressed && !physicalRB && !physicalCircle)
 		{
 			QueueHJAction(
 				HJAction::LeftHand
 			);
 		}
 
-		//
 		// Legs / tackle.
-		//
-		// 
-		//
 		// same update is always tackle; root inputs still get the chord window
-		//
 		const ULONGLONG now =
 			GetTickCount64();
 
@@ -1040,7 +1145,8 @@ namespace
 			}
 		}
 
-		if (rtPressed && ltPressed)
+		// Circle held = block, tackle chord loses
+		if (rtPressed && ltPressed && !physicalCircle)
 		{
 			g_pendingTrigger = PendingTrigger::None;
 			g_pendingTriggerSequence = 0;
@@ -1049,9 +1155,9 @@ namespace
 			QueueHJAction(HJAction::Tackle);
 		}
 		// a second trigger can replace the kick only while it is still queued
-		else if (
-			(g_pendingTrigger == PendingTrigger::RightLeg && ltPressed) ||
-			(g_pendingTrigger == PendingTrigger::LeftLeg && rtPressed))
+		else if (!physicalCircle &&
+			((g_pendingTrigger == PendingTrigger::RightLeg && ltPressed) ||
+			(g_pendingTrigger == PendingTrigger::LeftLeg && rtPressed)))
 		{
 			g_pendingTrigger = PendingTrigger::None;
 			g_pendingTriggerSequence = 0;
@@ -1084,9 +1190,7 @@ namespace
 			buttonValues
 		);
 
-		//
 		// lock on just holds vanilla r1
-		//
 
 		if (g_lockOnEnabled.load(
 			std::memory_order_acquire))
@@ -1111,9 +1215,7 @@ namespace
 
 		XINPUT_STATE state{};
 
-		if (XInputGetState(
-			0,
-			&state) != ERROR_SUCCESS)
+		if (XInputGetState(0, &state) != ERROR_SUCCESS)
 		{
 			previousA = false;
 			previousR3 = false;
@@ -1163,9 +1265,7 @@ namespace
 			return;
 		}
 
-		//
 		// r3 going to eventually be a toggle lock on
-		//
 
 		if (currentR3 && !previousR3)
 		{
@@ -1275,6 +1375,38 @@ namespace
 			}
 		}
 
+		if (stateName != nullptr &&
+			std::strcmp(stateName, "Guard") == 0 &&
+			HJ::Hooks::GuardDirection::kDirectionalBlockEnabled &&
+			HJ::Hooks::GuardDirection::CurrentSideId() != -1)
+		{
+			const std::uintptr_t playerContainer =
+				g_currentAttackContainer.load();
+
+			if (playerContainer == 0 ||
+				stateContainer == playerContainer)
+			{
+				HJ::Hooks::GuardDirection::NotifyGuardEntered();
+				HJ::Hooks::GuardDirection::ScanGuardObject(
+					reinterpret_cast<std::uintptr_t>(stateObject),
+					stateContainer);
+				HJ::Hooks::GuardDirection::ScanStanceMotion(
+					stateContainer,
+					HJ::Hooks::GuardDirection::CurrentSideId());
+			}
+		}
+
+		if (stateName != nullptr &&
+			std::strcmp(stateName, "GuardReaction") == 0 &&
+			HJ::Hooks::GuardDirection::kDirectionalBlockEnabled &&
+			HJ::Hooks::GuardDirection::kGuardReactionTelemetry &&
+			HJ::Hooks::GuardDirection::CurrentSideId() != -1)
+		{
+			HJ::Hooks::GuardDirection::DumpGuardReaction(
+				reinterpret_cast<std::uintptr_t>(stateObject),
+				HJ::Hooks::GuardDirection::CurrentSideId());
+		}
+
 		if (IsTraceActive())
 		{
 			std::ostringstream stream;
@@ -1325,30 +1457,7 @@ namespace
 		return result;
 	}
 
-	// addresses:
-	// ulonglong FUN_142E8F500(
-	//  ulonglong param_1,
-	//  uint      param_2, // fighter command key
-	//  uint      param_3, // style
-	//  uint      param_4  // option/behavior fl;ag?
-	// );
-	//
-	//
-	// style fightercommand key:
-	// snake = 0x40
-	// crane = 0x41
-	// tiger = 0x42
-	// boxer = 0x73
-	//
-	// stores at:
-	// DAT_14430BE48 + 0xE8
-	//
-	// windosx x64
-	// rcx = context
-	// edx = key
-	// r8d = mode
-	// r9b = option
-	//
+	
 	std::uint64_t __fastcall CheckEligibilityHook(
 		std::uint64_t context,
 		std::uint32_t key,
@@ -1535,27 +1644,19 @@ namespace HJ::Hooks::FighterCommand
 				gameModule
 				);
 
-		// 
 		// xinput_pollandtranslatecontroller
-		// 0x1419F2EC0 - 0x140000000
-		// = 0x019F2EC0
+
 
 		constexpr std::uintptr_t ControllerTranslateRva =
 			0x019F2EC0;
 
-		//
-		// TEMPORARY hardcoded rva
-		// 0x142E8F500 - 0x140000000
-		// = 0x02E8F500
-		//
+
 		constexpr std::uintptr_t CheckEligibilityRva =
 			0x02E8F500;
 
-		//
 		// FUN_1403B43D0
-		// 0x1403B43D0 - 0x140000000
-		// = 0x003B43D0
-		//
+
+
 		constexpr std::uintptr_t NamedStateRva =
 			0x003B43D0;
 
@@ -1750,10 +1851,8 @@ namespace HJ::Hooks::FighterCommand
 			);
 		}
 
-		//
-		// match semantic ibjmput
+		// matched semantic input, buffer legitimately consumed.
 		// this command legitimately consumed the buffer.
-		//
 		if (action != HJAction::None &&
 			requiredAction != HJAction::None &&
 			requiredAction == action)
@@ -1786,9 +1885,7 @@ namespace HJ::Hooks::FighterCommand
 			ClearBufferedHJAction();
 		}
 
-		//
 		// diff attack starteed before buffer belonging to prev attack was consumend
-		//
 		else if (
 			action != HJAction::None &&
 			sourceCommand != 0 &&
@@ -1797,9 +1894,7 @@ namespace HJ::Hooks::FighterCommand
 			CancelBufferedAction();
 		}
 
-		//
 		// ALWAYS track new accepted attack including auto transitions yaddayadda
-		//
 		g_currentAttackCommand.store(
 			packedCommand
 		);
