@@ -26,6 +26,8 @@ namespace HJ::Hooks::FighterCommand
 		HJAction action
 	);
 
+	bool IsCombatTraceActive();
+
 	bool IsRightHandTransportActive();
 
 	void NotifyAttackAccepted(

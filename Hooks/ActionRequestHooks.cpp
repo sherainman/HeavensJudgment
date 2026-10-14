@@ -217,39 +217,43 @@ namespace
 			return;
 		}
 
+		if (HJ::Hooks::FighterCommand::
+			IsCombatTraceActive())
 		{
-			const std::uint32_t commandKey =
-				HJ::Hooks::ActionRequest::GetCommandKey(
-					packedCommand
+			{
+				const std::uint32_t commandKey =
+					HJ::Hooks::ActionRequest::GetCommandKey(
+						packedCommand
+					);
+
+				const std::uint32_t variant =
+					HJ::Hooks::ActionRequest::GetVariant(
+						packedCommand
+					);
+
+				std::ostringstream stream;
+
+				stream
+					<< "ATTACK REQUEST"
+					<< " name=\""
+					<< (stateName ? stateName : "<null>")
+					<< "\""
+					<< " container=0x"
+					<< std::hex
+					<< container
+					<< " packed=0x"
+					<< packedCommand
+					<< " key=0x"
+					<< commandKey
+					<< " variant=0x"
+					<< variant
+					<< " caller=0x"
+					<< caller;
+
+				HJ::Logger::Info(
+					stream.str()
 				);
-
-			const std::uint32_t variant =
-				HJ::Hooks::ActionRequest::GetVariant(
-					packedCommand
-				);
-
-			std::ostringstream stream;
-
-			stream
-				<< "ATTACK REQUEST"
-				<< " name=\""
-				<< (stateName ? stateName : "<null>")
-				<< "\""
-				<< " container=0x"
-				<< std::hex
-				<< container
-				<< " packed=0x"
-				<< packedCommand
-				<< " key=0x"
-				<< commandKey
-				<< " variant=0x"
-				<< variant
-				<< " caller=0x"
-				<< caller;
-
-			HJ::Logger::Info(
-				stream.str()
-			);
+			}
 		}
 
 		g_attackBehaviorHook.call<void>(
@@ -1195,9 +1199,13 @@ namespace
 			// only permit the de sway request when the player is actually pressing phys a
 			if (!physicalA)
 			{
-				HJ::Logger::Info(
-					"HJ VANILLA EVADE SUPPRESSED: no physical A"
-				);
+				if (HJ::Hooks::FighterCommand::
+					IsCombatTraceActive())
+				{
+					HJ::Logger::Info(
+						"HJ VANILLA EVADE SUPPRESSED: no physical A"
+					);
+				}
 
 				return;
 			}
@@ -1208,57 +1216,77 @@ namespace
 			const EvadeEntityState estate =
 				ReadEvadeEntityState();
 
-			HJ::Logger::Info(
-				std::format(
-					"HJ EVADE CHECK: ent=0x{:X} probe1={} probe0={} e3c=0x{:X}({}) bit6={} e414={}({})",
-					static_cast<unsigned long long>(estate.entity),
-					probeOk,
-					SafeProbe(combatObject, 0),
-					static_cast<unsigned int>(estate.e3c),
-					estate.hasE3C,
-					estate.hasE3C ? ((estate.e3c >> 6) & 1u) : 0u,
-					static_cast<int>(estate.e414),
-					estate.hasE414
-				)
-			);
+			if (HJ::Hooks::FighterCommand::
+				IsCombatTraceActive())
+			{
+				HJ::Logger::Info(
+					std::format(
+						"HJ EVADE CHECK: ent=0x{:X} probe1={} probe0={} e3c=0x{:X}({}) bit6={} e414={}({})",
+						static_cast<unsigned long long>(estate.entity),
+						probeOk,
+						SafeProbe(combatObject, 0),
+						static_cast<unsigned int>(estate.e3c),
+						estate.hasE3C,
+						estate.hasE3C ? ((estate.e3c >> 6) & 1u) : 0u,
+						static_cast<int>(estate.e414),
+						estate.hasE414
+					)
+				);
+			}
 
 			if (!probeOk && EvadeEntityAbnormal(estate))
 			{
-				HJ::Logger::Info(
-					"HJ VANILLA EVADE SUPPRESSED: abnormal entity state"
-				);
+				if (HJ::Hooks::FighterCommand::
+					IsCombatTraceActive())
+				{
+					HJ::Logger::Info(
+						"HJ VANILLA EVADE SUPPRESSED: abnormal entity state"
+					);
+				}
 
 				return;
 			}
 
 			if (!probeOk)
 			{
-				HJ::Logger::Info(
-					"HJ EVADE ALLOWED: nominal entity, stance excluded"
-				);
+				if (HJ::Hooks::FighterCommand::
+					IsCombatTraceActive())
+				{
+					HJ::Logger::Info(
+						"HJ EVADE ALLOWED: nominal entity, stance excluded"
+					);
+				}
 			}
 			else
 			{
-				HJ::Logger::Info(
-					"HJ EVADE ALLOWED: native probe + physical A"
-				);
+				if (HJ::Hooks::FighterCommand::
+					IsCombatTraceActive())
+				{
+					HJ::Logger::Info(
+						"HJ EVADE ALLOWED: native probe + physical A"
+					);
+				}
 			}
 		}
 
-		const auto message =
-			std::format(
-				"SWAY REQUEST TRACE object=0x{:X} caller=0x{:X}",
-				static_cast<unsigned long long>(
-					combatObject
-					),
-				static_cast<unsigned long long>(
-					caller
-					)
-			);
+		if (HJ::Hooks::FighterCommand::
+			IsCombatTraceActive())
+		{
+			const auto message =
+				std::format(
+					"SWAY REQUEST TRACE object=0x{:X} caller=0x{:X}",
+					static_cast<unsigned long long>(
+						combatObject
+						),
+					static_cast<unsigned long long>(
+						caller
+						)
+				);
 
-		HJ::Logger::Info(
-			message.c_str()
-		);
+			HJ::Logger::Info(
+				message.c_str()
+			);
+		}
 
 		const std::uintptr_t previousRequestObject =
 			g_evadeRequestObject.exchange(
@@ -1495,22 +1523,26 @@ namespace
 					flagBA8
 				);
 
-			HJ::Logger::Info(
-				std::format(
-					"HJ EVADE STATE: root=0x{:X} D88={} ({}) BA8={} ({})",
-					static_cast<unsigned long long>(
-						stateRoot
-						),
-					static_cast<unsigned int>(
-						flagD88
-						),
-					hasD88,
-					static_cast<unsigned int>(
-						flagBA8
-						),
-					hasBA8
-				)
-			);
+			if (HJ::Hooks::FighterCommand::
+				IsCombatTraceActive())
+			{
+				HJ::Logger::Info(
+					std::format(
+						"HJ EVADE STATE: root=0x{:X} D88={} ({}) BA8={} ({})",
+						static_cast<unsigned long long>(
+							stateRoot
+							),
+						static_cast<unsigned int>(
+							flagD88
+							),
+						hasD88,
+						static_cast<unsigned int>(
+							flagBA8
+							),
+						hasBA8
+					)
+				);
+			}
 
 			const bool probeOk =
 				ProbeNativeEvadeEligibility(combatObject);
@@ -1518,19 +1550,23 @@ namespace
 			const EvadeEntityState estate =
 				ReadEvadeEntityState();
 
-			HJ::Logger::Info(
-				std::format(
-					"HJ EVADE CHECK: ent=0x{:X} probe1={} probe0={} e3c=0x{:X}({}) bit6={} e414={}({})",
-					static_cast<unsigned long long>(estate.entity),
-					probeOk,
-					SafeProbe(combatObject, 0),
-					static_cast<unsigned int>(estate.e3c),
-					estate.hasE3C,
-					estate.hasE3C ? ((estate.e3c >> 6) & 1u) : 0u,
-					static_cast<int>(estate.e414),
-					estate.hasE414
-				)
-			);
+			if (HJ::Hooks::FighterCommand::
+				IsCombatTraceActive())
+			{
+				HJ::Logger::Info(
+					std::format(
+						"HJ EVADE CHECK: ent=0x{:X} probe1={} probe0={} e3c=0x{:X}({}) bit6={} e414={}({})",
+						static_cast<unsigned long long>(estate.entity),
+						probeOk,
+						SafeProbe(combatObject, 0),
+						static_cast<unsigned int>(estate.e3c),
+						estate.hasE3C,
+						estate.hasE3C ? ((estate.e3c >> 6) & 1u) : 0u,
+						static_cast<int>(estate.e414),
+						estate.hasE414
+					)
+				);
+			}
 
 			// the probe folds stance into its answer and stance must NOT
 			// deny (free evade out of stance is the feature). e414 reads
@@ -1548,9 +1584,13 @@ namespace
 
 			if (!probeOk)
 			{
-				HJ::Logger::Info(
-					"HJ EVADE ALLOWED: nominal entity, stance excluded"
-				);
+				if (HJ::Hooks::FighterCommand::
+					IsCombatTraceActive())
+				{
+					HJ::Logger::Info(
+						"HJ EVADE ALLOWED: nominal entity, stance excluded"
+					);
+				}
 			}
 
 			// direct A evade also works outside lock-on stance

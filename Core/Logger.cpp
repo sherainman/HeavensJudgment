@@ -11,6 +11,11 @@ namespace
 	std::ofstream g_logFile;
 	std::mutex g_logMutex;
 
+	// flushing every line stalls the game threads.
+	// batch it, shutdown still flushes.
+	constexpr unsigned kFlushEveryLines = 64;
+	unsigned g_linesSinceFlush = 0;
+
 	void Write(const char* level, const std::string& message)
 	{
 		std::lock_guard lock(g_logMutex);
@@ -23,7 +28,11 @@ namespace
 			<< message
 			<< '\n';
 
-		g_logFile.flush();
+		if (++g_linesSinceFlush >= kFlushEveryLines)
+		{
+			g_linesSinceFlush = 0;
+			g_logFile.flush();
+		}
 	}
 }
 

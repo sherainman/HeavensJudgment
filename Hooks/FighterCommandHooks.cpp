@@ -1550,6 +1550,11 @@ namespace
 namespace HJ::Hooks::FighterCommand
 {
 
+	bool IsCombatTraceActive()
+	{
+		return IsTraceActive();
+	}
+
 	void CancelBufferedAction()
 	{
 		// the first trigger may still be waiting outside the action buffer
