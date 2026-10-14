@@ -1,5 +1,4 @@
 #include "ActionRequestsHooks.hpp"
-#include "GuardDirectionHooks.hpp"
 #include "../Combat/CombatSystem.hpp"
 #include "FighterCommandHooks.hpp"
 #include "../HUD/RadialDisc.hpp"
@@ -111,8 +110,11 @@ namespace
 	PlayerPosition g_previousPlayerPosition{};
 	bool g_havePreviousPlayerPosition = false;
 
+	// 
 	// HJ_RightLeg_1
+	// 
 	// Boxer table variant 0x09, style key 0x73
+	//
 	constexpr std::uint32_t kHJRightLeg1 =
 		0x00090073;
 
@@ -138,8 +140,10 @@ namespace
 			std::strcmp(stateName, "Attack") == 0;
 
 
+		//
 		// HJ right leg uses square as its internal token in fightercommand, rt synthesizes square 
 		// but real square must not launch the kick too 
+		//
 		if (isPlayerAttack &&
 			packedCommand == kHJRightLeg1)
 		{
@@ -171,7 +175,10 @@ namespace
 			XINPUT_STATE input{};
 
 			const bool hasController =
-				XInputGetState(0, &input) == ERROR_SUCCESS;
+				XInputGetState(
+					0,
+					&input
+				) == ERROR_SUCCESS;
 
 			const bool physicalLT =
 				hasController &&
@@ -326,90 +333,8 @@ namespace
 		}
 	}
 
-	bool SafeReadU32(
-		std::uintptr_t address,
-		std::uint32_t& value) noexcept
-	{
-		__try
-		{
-			value =
-				*reinterpret_cast<const std::uint32_t*>(
-					address
-					);
-
-			return true;
-		}
-		__except (EXCEPTION_EXECUTE_HANDLER)
-		{
-			value = 0;
-			return false;
-		}
-	}
-
-	bool SafeReadI32(
-		std::uintptr_t address,
-		std::int32_t& value) noexcept
-	{
-		__try
-		{
-			value =
-				*reinterpret_cast<const std::int32_t*>(
-					address
-					);
-
-			return true;
-		}
-		__except (EXCEPTION_EXECUTE_HANDLER)
-		{
-			value = 0;
-			return false;
-		}
-	}
-
-	// player-entity evade state for the deny table. +0x3C bit 6 is the
-	// sway-eligible flag, +0x414 carries stun/knockdown state (ledger:
-	// enemy scan expects 0x55 somewhere in there, player values unproven
-	// so we log, never gate on these yet).
-	struct EvadeEntityState
-	{
-		bool hasEntity = false;
-		std::uintptr_t entity = 0;
-		bool hasE3C = false;
-		std::uint32_t e3c = 0;
-		bool hasE414 = false;
-		std::int32_t e414 = 0;
-	};
-
-	EvadeEntityState ReadEvadeEntityState() noexcept
-	{
-		EvadeEntityState st;
-		const std::uintptr_t entity =
-			g_playerEntity.load(std::memory_order_acquire);
-		if (entity == 0)
-			return st;
-		st.hasEntity = true;
-		st.entity = entity;
-		st.hasE3C = SafeReadU32(entity + 0x3C, st.e3c);
-		st.hasE414 = SafeReadI32(entity + 0x414, st.e414);
-		return st;
-	}
-
-
-	// interim exclusion rule (proven 2026-10-13: stance does NOT move
-	// e414 — it reads 1 locked-on or not). deny only on a deviating
-	// entity state; stance alone never denies. stun/down/weapon values
-	// still being mapped from these logs; until then anything nominal
-	// behaves like the old always-allow path.
-	bool EvadeEntityAbnormal(const EvadeEntityState& st) noexcept
-	{
-		return st.hasE414 && st.e414 != 1;
-	}
-
-	// arg split experiment: the game calls it with 1. logging 0
-	// alongside tells us whether stance/stun split across args.
-	bool ProbeSwayAllowed(
-		std::uintptr_t combatObject,
-		std::uint8_t mode)
+	bool ProbeNativeEvadeEligibility(
+		std::uintptr_t combatObject)
 	{
 		if (combatObject == 0)
 			return false;
@@ -443,14 +368,8 @@ namespace
 
 		return eligibility(
 			combatObject,
-			mode
+			1
 		) != 0;
-	}
-
-	bool ProbeNativeEvadeEligibility(
-		std::uintptr_t combatObject)
-	{
-		return ProbeSwayAllowed(combatObject, 1);
 	}
 
 	bool TryReadEvadeStateFlag(
@@ -536,161 +455,6 @@ namespace
 	return outStateRoot != 0;
 }
 
-	// transition watch: the frozen words (e414 stuck at 1 through
-	// reported stuns) mean either the state lives elsewhere or the
-	// entity pointer is stale. log every change so tester annotations
-	// ("knocked down second time") map to signatures.
-	struct EvadeWatchState
-	{
-		bool armed = false;
-		std::uintptr_t entity = 0;
-		std::uint32_t e3c = 0;
-		std::int32_t e414 = 0;
-		std::uint8_t d88 = 0;
-		std::uint8_t ba8 = 0;
-		bool probe = false;
-		bool probe0 = false;
-	};
-	EvadeWatchState g_watch;
-
-	static bool SafeProbe(std::uintptr_t combatObject, std::uint8_t mode = 1) noexcept
-	{
-		__try
-		{
-			return ProbeSwayAllowed(combatObject, mode);
-		}
-		__except (EXCEPTION_EXECUTE_HANDLER)
-		{
-			return false;
-		}
-	}
-
-	// motion-object helpers (same tables the guard code uses): entity+0xC4
-	// motion handle -> resolved motion object -> scan for a KNOWN guard
-	// motion id (13919). whatever offset repeats across guard entries is
-	// the motion-id field; round B gates stun/down ids read from there.
-	static std::uintptr_t ResolveMotionHandle(std::uint32_t handle) noexcept
-	{
-		const std::uintptr_t base =
-			reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
-		if (base == 0 || (handle & 0xFFFFF) >= 0x80000)
-			return 0;
-		__try
-		{
-			const std::uintptr_t slot = (handle & 0xFFFFF) * 0x20;
-			if (*reinterpret_cast<const std::uint16_t*>(base + 0x430EDC8 + slot) != (handle >> 0x14))
-				return 0;
-			return *reinterpret_cast<std::uintptr_t*>(base + 0x430EDC0 + slot);
-		}
-		__except (EXCEPTION_EXECUTE_HANDLER)
-		{
-			return 0;
-		}
-	}
-
-	static bool CopyMotionBytes(std::uintptr_t target, std::uint8_t* out, std::size_t n) noexcept
-	{
-		__try
-		{
-			std::memcpy(out, reinterpret_cast<const void*>(target), n);
-			return true;
-		}
-		__except (EXCEPTION_EXECUTE_HANDLER)
-		{
-			return false;
-		}
-	}
-
-	std::uint32_t g_lastScanMotH = 0;
-
-	void HuntMotionIdOffset(std::uintptr_t entity) noexcept
-	{
-		std::uint32_t motH = 0;
-		if (entity == 0 || !SafeReadU32(entity + 0xC4, motH) || motH == 0)
-			return;
-		if (motH == g_lastScanMotH)
-			return;
-		g_lastScanMotH = motH;
-		const std::uintptr_t motion = ResolveMotionHandle(motH);
-		if (motion == 0)
-			return;
-		static std::uint8_t mbuf[0x400];
-		if (!CopyMotionBytes(motion, mbuf, sizeof(mbuf)))
-			return;
-		// 13919 = guard motion row the guard logs show live. offsets that
-		// repeat across sessions are the id field.
-		std::string hits;
-		for (int off = 0; off + 2 <= 0x400; off += 2)
-		{
-			std::uint16_t v = 0;
-			std::memcpy(&v, mbuf + off, 2);
-			if (v == 13919)
-				hits += std::to_string(off) + " ";
-		}
-		HJ::Logger::Info(
-			std::format(
-				"HJ EVADE MOTSCAN: motH={} motion=0x{:X} id13919@off={}",
-				motH,
-				static_cast<unsigned long long>(motion),
-				hits.empty() ? "(none)" : hits
-			)
-		);
-	}
-
-	void WatchEvadeState(std::uintptr_t combatObject) noexcept
-	{
-		std::uintptr_t stateRoot = 0;
-		if (!TryGetNativeEvadeStateRoot(combatObject, stateRoot))
-			return;
-		std::uint8_t d88 = 0xFF, ba8 = 0xFF;
-		if (!TryReadEvadeStateFlag(stateRoot, 0xD88, d88))
-			return;
-		if (!TryReadEvadeStateFlag(stateRoot, 0xBA8, ba8))
-			return;
-		const EvadeEntityState estate = ReadEvadeEntityState();
-		const bool probeOk = SafeProbe(combatObject);
-		const bool probe0Ok = SafeProbe(combatObject, 0);
-		std::uint32_t motH = 0;
-		if (estate.hasEntity)
-			SafeReadU32(estate.entity + 0xC4, motH);
-		if (!g_watch.armed ||
-			g_watch.entity != estate.entity ||
-			g_watch.e3c != estate.e3c ||
-			g_watch.e414 != estate.e414 ||
-			g_watch.d88 != d88 ||
-			g_watch.ba8 != ba8 ||
-			g_watch.probe != probeOk ||
-			g_watch.probe0 != probe0Ok)
-		{
-			g_watch.armed = true;
-			g_watch.entity = estate.entity;
-			g_watch.e3c = estate.e3c;
-			g_watch.e414 = estate.e414;
-			g_watch.d88 = d88;
-			g_watch.ba8 = ba8;
-			g_watch.probe = probeOk;
-			g_watch.probe0 = probe0Ok;
-			HJ::Logger::Info(
-				std::format(
-					"HJ EVADE WATCH: ent=0x{:X} e3c=0x{:X} e414={} D88={} BA8={} probe1={} probe0={} motH={}",
-					static_cast<unsigned long long>(estate.entity),
-					static_cast<unsigned int>(estate.e3c),
-					static_cast<int>(estate.e414),
-					static_cast<unsigned int>(d88),
-					static_cast<unsigned int>(ba8),
-					probeOk,
-					probe0Ok,
-					motH
-				)
-			);
-		}
-		// offset hunt runs only while guarding (known 13919 motion live)
-		// so normal combat stays quiet. tester just guards a few times.
-		if (HJ::Hooks::GuardDirection::CurrentSideId() != -1 &&
-			estate.hasEntity)
-			HuntMotionIdOffset(estate.entity);
-	}
-
 	// slef explanatory...
 
 	bool NopCode(
@@ -731,6 +495,7 @@ namespace
 
 		return true;
 	}
+
 
 
 	bool PatchBoxerAvailability(
@@ -868,8 +633,10 @@ namespace
 		if (requestedStyleId !=
 			kBoxerStyleId)
 		{
+			//
 			// caller already changed +68 before getting here
-			// put it back and eat the stylechange
+			// put it back and eat the stylechange (nom)
+			//
 			ForceBoxerStyleState();
 
 			HJ::Logger::Info(
@@ -904,8 +671,10 @@ namespace
 			return;
 		}
 
+		//
 		// do this even outside combat so loading a save
 		// already has boxer as current style
+		//
 		if (!ForceBoxerStyleState())
 			return;
 
@@ -929,8 +698,10 @@ namespace
 			"HJ STYLE: setting initial boxer"
 		);
 
+		//
 		// run one real boxer StyleChange so the actual
 		// fighter state gets initialized too
+		//
 		g_styleChangeHook.call<void>(
 			combatObject,
 			kBoxerStyleId
@@ -1187,12 +958,18 @@ namespace
 			XINPUT_STATE input{};
 
 			const bool physicalA =
-				XInputGetState(0, &input) == ERROR_SUCCESS &&
+				XInputGetState(
+					0,
+					&input
+				) == ERROR_SUCCESS &&
 				(input.Gamepad.wButtons &
 					XINPUT_GAMEPAD_A) != 0;
 
+			//
 			// fc uses a synthetic cross for r1 inputs
+			//
 			// only permit the de sway request when the player is actually pressing phys a
+			//
 			if (!physicalA)
 			{
 				HJ::Logger::Info(
@@ -1202,47 +979,9 @@ namespace
 				return;
 			}
 
-			const bool probeOk =
-				ProbeNativeEvadeEligibility(combatObject);
-
-			const EvadeEntityState estate =
-				ReadEvadeEntityState();
-
 			HJ::Logger::Info(
-				std::format(
-					"HJ EVADE CHECK: ent=0x{:X} probe1={} probe0={} e3c=0x{:X}({}) bit6={} e414={}({})",
-					static_cast<unsigned long long>(estate.entity),
-					probeOk,
-					SafeProbe(combatObject, 0),
-					static_cast<unsigned int>(estate.e3c),
-					estate.hasE3C,
-					estate.hasE3C ? ((estate.e3c >> 6) & 1u) : 0u,
-					static_cast<int>(estate.e414),
-					estate.hasE414
-				)
+				"HJ EVADE ALLOWED: native eligibility + physical A"
 			);
-
-			if (!probeOk && EvadeEntityAbnormal(estate))
-			{
-				HJ::Logger::Info(
-					"HJ VANILLA EVADE SUPPRESSED: abnormal entity state"
-				);
-
-				return;
-			}
-
-			if (!probeOk)
-			{
-				HJ::Logger::Info(
-					"HJ EVADE ALLOWED: nominal entity, stance excluded"
-				);
-			}
-			else
-			{
-				HJ::Logger::Info(
-					"HJ EVADE ALLOWED: native probe + physical A"
-				);
-			}
 		}
 
 		const auto message =
@@ -1319,7 +1058,9 @@ namespace
 			);
 		}
 
+		//
 		// resolve yagamis entity only resolve when it changes or hasnt been successfully resolved yet
+		//
 
 		if (previousPlayerObject != combatObject ||
 			g_playerEntity.load(
@@ -1397,17 +1138,15 @@ namespace
 		HJ::Hooks::FighterCommand::
 			NotifyPlayerCombatUpdate();
 
-		// transition watch runs every tick; logs only on change so the
-		// tester just annotates knockdowns and the signatures show up.
-		if (HJ::Combat::IsInCombat())
-			WatchEvadeState(combatObject);
-
 		static bool previousPhysicalA = false;
 
 		XINPUT_STATE input{};
 
 		const bool hasController =
-			XInputGetState(0, &input) == ERROR_SUCCESS;
+			XInputGetState(
+				0,
+				&input
+			) == ERROR_SUCCESS;
 
 		const bool physicalA =
 			hasController &&
@@ -1425,33 +1164,6 @@ namespace
 			g_evadeAcceptedSequence.load(
 				std::memory_order_acquire
 			) != previousEvadeSequence;
-
-		// relaxed-state snapshot: A pressed outside combat tells us what
-		// the stance bits look like with no fight running. diff these
-		// against the in-combat CHECK lines to isolate the stance flag,
-		// which the gate must then ignore (free evade out of stance is
-		// the feature, not the bug).
-		if (physicalAPressed && !HJ::Combat::IsInCombat())
-		{
-			const bool probeOk =
-				ProbeNativeEvadeEligibility(combatObject);
-
-			const EvadeEntityState estate =
-				ReadEvadeEntityState();
-
-			HJ::Logger::Info(
-				std::format(
-					"HJ EVADE RELAXED: ent=0x{:X} probe={} e3c=0x{:X}({}) bit6={} e414={}({})",
-					static_cast<unsigned long long>(estate.entity),
-					probeOk,
-					static_cast<unsigned int>(estate.e3c),
-					estate.hasE3C,
-					estate.hasE3C ? ((estate.e3c >> 6) & 1u) : 0u,
-					static_cast<int>(estate.e414),
-					estate.hasE414
-				)
-			);
-		}
 
 		if (physicalAPressed &&
 			!nativeEvadeAccepted &&
@@ -1511,47 +1223,6 @@ namespace
 					hasBA8
 				)
 			);
-
-			const bool probeOk =
-				ProbeNativeEvadeEligibility(combatObject);
-
-			const EvadeEntityState estate =
-				ReadEvadeEntityState();
-
-			HJ::Logger::Info(
-				std::format(
-					"HJ EVADE CHECK: ent=0x{:X} probe1={} probe0={} e3c=0x{:X}({}) bit6={} e414={}({})",
-					static_cast<unsigned long long>(estate.entity),
-					probeOk,
-					SafeProbe(combatObject, 0),
-					static_cast<unsigned int>(estate.e3c),
-					estate.hasE3C,
-					estate.hasE3C ? ((estate.e3c >> 6) & 1u) : 0u,
-					static_cast<int>(estate.e414),
-					estate.hasE414
-				)
-			);
-
-			// the probe folds stance into its answer and stance must NOT
-			// deny (free evade out of stance is the feature). e414 reads
-			// 1 locked-on or not, so stance demonstrably leaves it alone:
-			// deny only on a deviating entity state. stun/down/weapon
-			// values still being mapped from these logs.
-			if (!probeOk && EvadeEntityAbnormal(estate))
-			{
-				HJ::Logger::Info(
-					"HJ EVADE DENIED: abnormal entity state"
-				);
-
-				return result;
-			}
-
-			if (!probeOk)
-			{
-				HJ::Logger::Info(
-					"HJ EVADE ALLOWED: nominal entity, stance excluded"
-				);
-			}
 
 			// direct A evade also works outside lock-on stance
 			// the PlayerSway callback confirms whether it was accepted
@@ -1759,13 +1430,17 @@ namespace HJ::Hooks::ActionRequest
 
 
 		// StartAttackBehaviorFromPackedCommand
-
-
+		// 0x142F21D80 - 0x140000000
+		// = 0x02F21D80
+		//
 		constexpr std::uintptr_t AttackBehaviorRva =
 			0x02F21D80;
 
+		//
 		// PlayerCombat_Update
-
+		// 0x142EC3830 - 0x140000000
+		// = 0x02EC3830
+		//
 
 		constexpr std::uintptr_t PlayerCombatUpdateRva =
 			0x02EC3830;

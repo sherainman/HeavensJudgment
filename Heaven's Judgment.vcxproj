@@ -97,7 +97,6 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -120,7 +119,6 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
-      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -142,7 +140,6 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <AdditionalIncludeDirectories>C:\Users\Owner\Documents\ModFiles\Heaven%27s Judgment\external\safetyhook;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -166,7 +163,6 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <AdditionalIncludeDirectories>C:\Users\Owner\Documents\ModFiles\Heaven%27s Judgment\external\safetyhook;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -188,11 +184,9 @@
     <ClInclude Include="HUD\RadialHealthBridge.hpp" />
     <ClInclude Include="HUD\RadialDisc.hpp" />
     <ClInclude Include="HUD\RadialDiscDrive.hpp" />
-    <ClInclude Include="HUD\FrameOverlay.hpp" />
     <ClInclude Include="external\safetyhook\safetyhook.hpp" />
     <ClInclude Include="external\safetyhook\Zydis.h" />
     <ClInclude Include="Hooks\ActionRequestsHooks.hpp" />
-    <ClInclude Include="Hooks\GuardDirectionHooks.hpp" />
     <ClInclude Include="Hooks\FighterCommandHooks.hpp" />
     <ClInclude Include="Hooks\Hooks.hpp" />
   </ItemGroup>
@@ -207,11 +201,9 @@
     <ClCompile Include="HUD\RadialHealthBridge.cpp" />
     <ClCompile Include="HUD\RadialDisc.cpp" />
     <ClCompile Include="HUD\RadialDiscDrive.cpp" />
-    <ClCompile Include="HUD\FrameOverlay.cpp" />
     <ClCompile Include="external\safetyhook\safetyhook.cpp" />
     <ClCompile Include="external\safetyhook\Zydis.c" />
     <ClCompile Include="Hooks\ActionRequestHooks.cpp" />
-    <ClCompile Include="Hooks\GuardDirectionHooks.cpp" />
     <ClCompile Include="Hooks\FighterCommandHooks.cpp" />
     <ClCompile Include="Hooks\Hooks.cpp" />
   </ItemGroup>

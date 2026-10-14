@@ -22,10 +22,6 @@ namespace HJ
 			"Heaven's Judgment starting."
 		);
 
-		Logger::Info(
-			"HJ BUILD: " __DATE__ " " __TIME__
-		);
-
 		const HMODULE gameModule =
 			GetModuleHandleA(nullptr);
 

@@ -30,6 +30,9 @@
     <ClInclude Include="Engine\Engine.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="HUD\RadialHealthHud.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="HeavensJudgment.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -45,9 +48,6 @@
     <ClInclude Include="Hooks\ActionRequestsHooks.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Hooks\GuardDirectionHooks.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="HUD\RadialHealthBridge.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -55,12 +55,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="HUD\RadialDiscDrive.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="HUD\FrameOverlay.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="HUD\BoxingGaugeTrace.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -78,6 +72,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Engine\Engine.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="HUD\RadialHealthHud.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="HeavensJudgment.cpp">
@@ -98,9 +95,6 @@
     <ClCompile Include="Hooks\ActionRequestHooks.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="Hooks\GuardDirectionHooks.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="HUD\RadialHealthBridge.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -108,12 +102,6 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="HUD\RadialDiscDrive.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="HUD\FrameOverlay.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="HUD\BoxingGaugeTrace.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
