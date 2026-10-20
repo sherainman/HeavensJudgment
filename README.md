@@ -56,6 +56,8 @@ Very EARLY development.
 
 Not associated with or endorsed by SEGA or RGG Studio. Unofficial modding and reverse engineering project.
 
+Lost Judgment and everything in it — characters, animation, audio, trademarks — belongs to SEGA / RGG Studio. None of it is claimed here, and none of it is redistributed. The MIT license covers this repository's own source code and nothing else.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).
