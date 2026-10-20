@@ -55,3 +55,10 @@ Very EARLY development.
 ## Disclaimer
 
 Not associated with or endorsed by SEGA or RGG Studio. Unofficial modding and reverse engineering project.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
+
+Third-party code keeps its own license: safetyhook and Zydis are permissive and their copyright notices apply to their sources under `external/`. No game assets, extracted animation data or other SEGA/RGG Studio content is included in this repository.
+
