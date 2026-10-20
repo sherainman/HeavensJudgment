@@ -62,5 +62,5 @@ Lost Judgment and everything in it — characters, animation, audio, trademarks 
 
 MIT, see [LICENSE](LICENSE).
 
-Third-party code keeps its own license: safetyhook and Zydis are permissive and their copyright notices apply to their sources under `external/`. No game assets, extracted animation data or other SEGA/RGG Studio content is included in this repository.
+Third-party code keeps its own license: safetyhook is Boost 1.0 and Zydis is MIT, both under `external/` with their notices. No game assets, extracted animation data or other SEGA/RGG Studio content is included in this repository.
 
