@@ -33,6 +33,7 @@ namespace
 	constexpr std::uint32_t kHealthCallerA = 0x0275D3B6;
 	constexpr std::uint32_t kHealthCallerB = 0x0275D3CE;
 
+
 	// QTE radial writers (0x1428A2080): layer lookup by ordinal in r8d,
 	// then set_value with (pos-start)/span clamped >= 0.
 	struct QteSite

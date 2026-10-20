@@ -3,6 +3,7 @@
 #include "../Combat/CombatSystem.hpp"
 #include "FighterCommandHooks.hpp"
 #include "../HUD/RadialDisc.hpp"
+#include "../HUD/HactOverlay.hpp"
 
 #include "../Core/Logger.hpp"
 
@@ -382,6 +383,8 @@ namespace
 		std::uint32_t e3c = 0;
 		bool hasE414 = false;
 		std::int32_t e414 = 0;
+		bool hasE490 = false;
+		std::int32_t e490 = 0;
 	};
 
 	EvadeEntityState ReadEvadeEntityState() noexcept
@@ -395,6 +398,7 @@ namespace
 		st.entity = entity;
 		st.hasE3C = SafeReadU32(entity + 0x3C, st.e3c);
 		st.hasE414 = SafeReadI32(entity + 0x414, st.e414);
+		st.hasE490 = SafeReadI32(entity + 0x490, st.e490);
 		return st;
 	}
 
@@ -550,6 +554,7 @@ namespace
 		std::uintptr_t entity = 0;
 		std::uint32_t e3c = 0;
 		std::int32_t e414 = 0;
+		std::int32_t e490 = 0;
 		std::uint8_t d88 = 0;
 		std::uint8_t ba8 = 0;
 		bool probe = false;
@@ -569,10 +574,67 @@ namespace
 		}
 	}
 
-	// motion-object helpers (same tables the guard code uses): entity+0xC4
-	// motion handle -> resolved motion object -> scan for a KNOWN guard
-	// motion id (13919). whatever offset repeats across guard entries is
-	// the motion-id field; round B gates stun/down ids read from there.
+	// THE evade gate: every evade door calls this, no door carries its
+	// own rule. deny only on deviating entity state (stance excluded by
+	// design). verbose lines behind the combat trace, denials always log.
+	bool EvadeAllowed(std::uintptr_t combatObject, const char* door)
+	{
+		const bool probeOk = SafeProbe(combatObject);
+		const EvadeEntityState estate = ReadEvadeEntityState();
+		std::uintptr_t combatVtable = 0;
+		SafeReadPointer(combatObject, combatVtable);
+		const bool trace =
+			HJ::Hooks::FighterCommand::IsCombatTraceActive();
+		if (trace)
+		{
+			HJ::Logger::Info(
+				std::format(
+					"HJ EVADE CHECK: ent=0x{:X} vt=0x{:X} probe1={} probe0={} e3c=0x{:X}({}) bit6={} e414={}({}) e490={}({})",
+					static_cast<unsigned long long>(estate.entity),
+					static_cast<unsigned long long>(combatVtable),
+					probeOk,
+					SafeProbe(combatObject, 0),
+					static_cast<unsigned int>(estate.e3c),
+					estate.hasE3C,
+					estate.hasE3C ? ((estate.e3c >> 6) & 1u) : 0u,
+					static_cast<int>(estate.e414),
+					estate.hasE414,
+					static_cast<int>(estate.e490),
+					estate.hasE490
+				)
+			);
+		}
+		if (!probeOk && EvadeEntityAbnormal(estate))
+		{
+			HJ::Logger::Info(
+				std::format("HJ EVADE DENIED [{}]: abnormal entity state", door)
+			);
+
+			return false;
+		}
+		if (HJ::Hooks::FighterCommand::IsPlayerStunLatched())
+		{
+			HJ::Logger::Info(
+				std::format("HJ EVADE DENIED [{}]: stun latch", door)
+			);
+
+			return false;
+		}
+		if (trace)
+		{
+			HJ::Logger::Info(
+				std::format(
+					"HJ EVADE ALLOWED [{}]: {}",
+					door,
+					probeOk ? "native probe" : "nominal entity, stance excluded"
+				)
+			);
+		}
+
+		return true;
+	}
+
+
 	static std::uintptr_t ResolveMotionHandle(std::uint32_t handle) noexcept
 	{
 		const std::uintptr_t base =
@@ -661,6 +723,7 @@ namespace
 			g_watch.entity != estate.entity ||
 			g_watch.e3c != estate.e3c ||
 			g_watch.e414 != estate.e414 ||
+			g_watch.e490 != estate.e490 ||
 			g_watch.d88 != d88 ||
 			g_watch.ba8 != ba8 ||
 			g_watch.probe != probeOk ||
@@ -670,16 +733,18 @@ namespace
 			g_watch.entity = estate.entity;
 			g_watch.e3c = estate.e3c;
 			g_watch.e414 = estate.e414;
+			g_watch.e490 = estate.e490;
 			g_watch.d88 = d88;
 			g_watch.ba8 = ba8;
 			g_watch.probe = probeOk;
 			g_watch.probe0 = probe0Ok;
 			HJ::Logger::Info(
 				std::format(
-					"HJ EVADE WATCH: ent=0x{:X} e3c=0x{:X} e414={} D88={} BA8={} probe1={} probe0={} motH={}",
+					"HJ EVADE WATCH: ent=0x{:X} e3c=0x{:X} e414={} e490={} D88={} BA8={} probe1={} probe0={} motH={}",
 					static_cast<unsigned long long>(estate.entity),
 					static_cast<unsigned int>(estate.e3c),
 					static_cast<int>(estate.e414),
+					static_cast<int>(estate.e490),
 					static_cast<unsigned int>(d88),
 					static_cast<unsigned int>(ba8),
 					probeOk,
@@ -1210,63 +1275,8 @@ namespace
 				return;
 			}
 
-			const bool probeOk =
-				ProbeNativeEvadeEligibility(combatObject);
-
-			const EvadeEntityState estate =
-				ReadEvadeEntityState();
-
-			if (HJ::Hooks::FighterCommand::
-				IsCombatTraceActive())
-			{
-				HJ::Logger::Info(
-					std::format(
-						"HJ EVADE CHECK: ent=0x{:X} probe1={} probe0={} e3c=0x{:X}({}) bit6={} e414={}({})",
-						static_cast<unsigned long long>(estate.entity),
-						probeOk,
-						SafeProbe(combatObject, 0),
-						static_cast<unsigned int>(estate.e3c),
-						estate.hasE3C,
-						estate.hasE3C ? ((estate.e3c >> 6) & 1u) : 0u,
-						static_cast<int>(estate.e414),
-						estate.hasE414
-					)
-				);
-			}
-
-			if (!probeOk && EvadeEntityAbnormal(estate))
-			{
-				if (HJ::Hooks::FighterCommand::
-					IsCombatTraceActive())
-				{
-					HJ::Logger::Info(
-						"HJ VANILLA EVADE SUPPRESSED: abnormal entity state"
-					);
-				}
-
+			if (!EvadeAllowed(combatObject, "vanilla"))
 				return;
-			}
-
-			if (!probeOk)
-			{
-				if (HJ::Hooks::FighterCommand::
-					IsCombatTraceActive())
-				{
-					HJ::Logger::Info(
-						"HJ EVADE ALLOWED: nominal entity, stance excluded"
-					);
-				}
-			}
-			else
-			{
-				if (HJ::Hooks::FighterCommand::
-					IsCombatTraceActive())
-				{
-					HJ::Logger::Info(
-						"HJ EVADE ALLOWED: native probe + physical A"
-					);
-				}
-			}
 		}
 
 		if (HJ::Hooks::FighterCommand::
@@ -1323,6 +1333,12 @@ namespace
 	std::uint8_t __fastcall PlayerCombatUpdateHook(
 		std::uintptr_t combatObject)
 	{
+		// Poll the HAct overlay from the per-frame combat tick. This is
+		// what drives its heartbeat diagnostics and, once a renderer
+		// exists, its draw state. Nothing else calls GetState(), so
+		// without this the overlay is inert.
+		HJ::HUD::HactOverlay::GetState();
+
 		const std::uintptr_t previousPlayerObject =
 			g_playerCombatObject.exchange(
 				combatObject,
@@ -1467,9 +1483,16 @@ namespace
 			const EvadeEntityState estate =
 				ReadEvadeEntityState();
 
+			// vtable pointer: unlocks the +0x208/+0x110 slot functions
+			// for static decompile. logged, never branched on.
+			std::uintptr_t combatVtable = 0;
+			SafeReadPointer(combatObject, combatVtable);
+
 			HJ::Logger::Info(
 				std::format(
-					"HJ EVADE RELAXED: ent=0x{:X} probe={} e3c=0x{:X}({}) bit6={} e414={}({})",
+					"HJ EVADE RELAXED: ent=0x{:X} vt=0x{:X} probe={} e3c=0x{:X}({}) bit6={} e414={}({})",
+					static_cast<unsigned long long>(estate.entity),
+					static_cast<unsigned long long>(combatVtable),
 					static_cast<unsigned long long>(estate.entity),
 					probeOk,
 					static_cast<unsigned int>(estate.e3c),
@@ -1544,54 +1567,10 @@ namespace
 				);
 			}
 
-			const bool probeOk =
-				ProbeNativeEvadeEligibility(combatObject);
-
-			const EvadeEntityState estate =
-				ReadEvadeEntityState();
-
-			if (HJ::Hooks::FighterCommand::
-				IsCombatTraceActive())
-			{
-				HJ::Logger::Info(
-					std::format(
-						"HJ EVADE CHECK: ent=0x{:X} probe1={} probe0={} e3c=0x{:X}({}) bit6={} e414={}({})",
-						static_cast<unsigned long long>(estate.entity),
-						probeOk,
-						SafeProbe(combatObject, 0),
-						static_cast<unsigned int>(estate.e3c),
-						estate.hasE3C,
-						estate.hasE3C ? ((estate.e3c >> 6) & 1u) : 0u,
-						static_cast<int>(estate.e414),
-						estate.hasE414
-					)
-				);
-			}
-
-			// the probe folds stance into its answer and stance must NOT
-			// deny (free evade out of stance is the feature). e414 reads
-			// 1 locked-on or not, so stance demonstrably leaves it alone:
-			// deny only on a deviating entity state. stun/down/weapon
-			// values still being mapped from these logs.
-			if (!probeOk && EvadeEntityAbnormal(estate))
-			{
-				HJ::Logger::Info(
-					"HJ EVADE DENIED: abnormal entity state"
-				);
-
+			// every evade door shares one rule (see EvadeAllowed):
+			// deny only on deviating entity state, stance excluded.
+			if (!EvadeAllowed(combatObject, "direct"))
 				return result;
-			}
-
-			if (!probeOk)
-			{
-				if (HJ::Hooks::FighterCommand::
-					IsCombatTraceActive())
-				{
-					HJ::Logger::Info(
-						"HJ EVADE ALLOWED: nominal entity, stance excluded"
-					);
-				}
-			}
 
 			// direct A evade also works outside lock-on stance
 			// the PlayerSway callback confirms whether it was accepted

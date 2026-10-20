@@ -3,10 +3,12 @@
 #include "FighterCommandHooks.hpp"
 #include "ActionRequestsHooks.hpp"
 #include "GuardDirectionHooks.hpp"
+#include "GuardMotionHooks.hpp"
 
 #include "../HUD/RadialHealthBridge.hpp"
 #include "../HUD/BoxingGaugeTrace.hpp"
 #include "../HUD/FrameOverlay.hpp"
+#include "../HUD/HactOverlay.hpp"
 #include "../HUD/RadialDiscDrive.hpp"
 #include "../Core/Logger.hpp"
 
@@ -46,8 +48,15 @@ namespace HJ::Hooks
 			);
 		}
 
-		// module base for the scene-liveness probe. Drive itself stays
-		// parked; this is just the base address it needs to scan.
+	
+		if (!HJ::HUD::HactOverlay::Initialize())
+		{
+			Logger::Warning(
+				"HAct overlay didn initialize."
+			);
+		}
+
+		
 		HJ::HUD::RadialDiscDrive::Initialize();
 
 		if (!ActionRequest::Initialize())
@@ -66,6 +75,14 @@ namespace HJ::Hooks
 			);
 
 			return false;
+		}
+
+		
+		if (!GuardMotion::Initialize())
+		{
+			Logger::Warning(
+				"Guard motion hook didn initialize."
+			);
 		}
 
 		Logger::Info(

@@ -189,10 +189,12 @@
     <ClInclude Include="HUD\RadialDisc.hpp" />
     <ClInclude Include="HUD\RadialDiscDrive.hpp" />
     <ClInclude Include="HUD\FrameOverlay.hpp" />
+    <ClInclude Include="HUD\HactOverlay.hpp" />
     <ClInclude Include="external\safetyhook\safetyhook.hpp" />
     <ClInclude Include="external\safetyhook\Zydis.h" />
     <ClInclude Include="Hooks\ActionRequestsHooks.hpp" />
     <ClInclude Include="Hooks\GuardDirectionHooks.hpp" />
+    <ClInclude Include="Hooks\GuardMotionHooks.hpp" />
     <ClInclude Include="Hooks\FighterCommandHooks.hpp" />
     <ClInclude Include="Hooks\Hooks.hpp" />
   </ItemGroup>
@@ -208,10 +210,12 @@
     <ClCompile Include="HUD\RadialDisc.cpp" />
     <ClCompile Include="HUD\RadialDiscDrive.cpp" />
     <ClCompile Include="HUD\FrameOverlay.cpp" />
+    <ClCompile Include="HUD\HactOverlay.cpp" />
     <ClCompile Include="external\safetyhook\safetyhook.cpp" />
     <ClCompile Include="external\safetyhook\Zydis.c" />
     <ClCompile Include="Hooks\ActionRequestHooks.cpp" />
     <ClCompile Include="Hooks\GuardDirectionHooks.cpp" />
+    <ClCompile Include="Hooks\GuardMotionHooks.cpp" />
     <ClCompile Include="Hooks\FighterCommandHooks.cpp" />
     <ClCompile Include="Hooks\Hooks.cpp" />
   </ItemGroup>

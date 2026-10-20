@@ -28,6 +28,11 @@ namespace HJ::Hooks::FighterCommand
 
 	bool IsCombatTraceActive();
 
+	// stun latch for the evade gate: true between a player StunMode /
+	// PlayerRagdollMode entry and the next WaitKamae / PlayerSway / Guard
+	// (3 s hard expiry). fails open.
+	bool IsPlayerStunLatched();
+
 	bool IsRightHandTransportActive();
 
 	void NotifyAttackAccepted(

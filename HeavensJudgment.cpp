@@ -108,6 +108,10 @@ namespace HJ
 			"Heaven's Judgment initialized successfully."
 		);
 
+		Logger::Info(
+			"HJ FEATURES: stunlatch e490 ptype entryreset"
+		);
+
 		return 0;
 	}
 }

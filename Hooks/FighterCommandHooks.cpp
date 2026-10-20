@@ -3,6 +3,7 @@
 #include "FighterCommandHooks.hpp"
 #include "ActionRequestsHooks.hpp"
 #include "GuardDirectionHooks.hpp"
+#include "GuardMotionHooks.hpp"
 
 #include "../Core/Logger.hpp"
 #include "../Engine/Engine.hpp"
@@ -21,6 +22,8 @@
 
 #include <mutex>
 #include <unordered_set>
+
+extern "C" std::uintptr_t HJ_GetPlayerCombatObject();
 
 // i am going to make an effort to comment this.
 // i am going to make an effort to comment this. yadda yadda
@@ -93,6 +96,23 @@ namespace
 
 	std::atomic<std::uintptr_t>
 		g_currentAttackContainer{ 0 };
+
+
+	// stun latch: StunMode / PlayerRagdollMode own the player container while
+	// active, and no entity word was found to carry that (every watched word
+	// frozen through live stuns, native +0x208 probe true inside StunMode).
+	// event-driven, fails open: unknown = false, plus a hard expiry so a
+	// missed clear can never stick the deny on. same player-container rule
+	// as the Guard entry below; the container is logged so a misattribution
+	// would be visible, not silent.
+	std::atomic<bool>
+		g_playerStunned{ false };
+
+	std::atomic<ULONGLONG>
+		g_playerStunnedAt{ 0 };
+
+	constexpr ULONGLONG kStunLatchExpiryMs =
+		3000;
 
 
 	// test for attack steering / commitment
@@ -1014,70 +1034,13 @@ namespace
 		buttonValues[6] = 0; // LB, HJ owns it now so vanilla guard never sees it
 		buttonValues[7] = 0; // RB
 
-		// Circle is the only block button, feeds native guard as virtual L1.
-		static int s_debSide = -1;
-		static int s_debCount = 0;
-		static int s_lastDebSide = -1;
-		static int s_guardPulse = 0;
-		static int s_pulseTimeout = 0;
-
+		// Circle is the only block button, so it feeds native guard as a
+		// virtual L1. Which side is being held is read in the guard hook
+		// itself; all this side has to do is make the game see the press.
 		if (physicalCircle)
 		{
-			const int guardSide = HJ::Hooks::GuardDirection::CurrentSideId();
-
-			if (guardSide == s_debSide)
-				++s_debCount;
-			else
-			{
-				s_debSide = guardSide;
-				s_debCount = 1;
-			}
-
-			if (s_debCount >= 4)
-			{
-				if (s_debSide != -1 && s_lastDebSide != -1 &&
-					s_debSide != s_lastDebSide &&
-					HJ::Hooks::GuardDirection::kDirectionalBlockEnabled &&
-					HJ::Hooks::GuardDirection::HasGuardCells())
-				{
-					(void)HJ::Hooks::GuardDirection::TakeGuardReentered();
-					s_guardPulse = -1;
-					s_pulseTimeout = 45;
-					HJ::Logger::Info("HJ GUARD: side switch, stance pulse");
-				}
-
-				s_lastDebSide = s_debSide;
-			}
-
-			// -1 waits for a real Guard re-enter, 45-tick fail-safe
-			if (s_guardPulse == -1)
-			{
-				if (HJ::Hooks::GuardDirection::TakeGuardReentered())
-				{
-					s_guardPulse = 0;
-					HJ::Logger::Info("HJ GUARD: pulse re-entered via signal");
-				}
-				else if (--s_pulseTimeout <= 0)
-				{
-					s_guardPulse = 0;
-					HJ::Logger::Info("HJ GUARD: pulse timeout, reasserting");
-				}
-			}
-			else if (s_guardPulse > 0)
-				--s_guardPulse;
-
-			if (s_guardPulse == 0)
-			{
-				*buttonMask |= kLBMask;
-				buttonValues[6] = 0xFF;
-			}
-		}
-		else
-		{
-			s_debSide = -1;
-			s_debCount = 0;
-			s_lastDebSide = -1;
-			s_guardPulse = 0;
+			*buttonMask |= kLBMask;
+			buttonValues[6] = 0xFF;
 		}
 
 		// a newer hand press replaces any trigger still waiting for its chord
@@ -1375,36 +1338,47 @@ namespace
 			}
 		}
 
-		if (stateName != nullptr &&
-			std::strcmp(stateName, "Guard") == 0 &&
-			HJ::Hooks::GuardDirection::kDirectionalBlockEnabled &&
-			HJ::Hooks::GuardDirection::CurrentSideId() != -1)
+		if (stateName != nullptr)
 		{
-			const std::uintptr_t playerContainer =
-				g_currentAttackContainer.load();
+			// Identity is the per-tick player combat object, never the
+			// attack container: attack tracking resets to 0 mid-stun, and
+			// the old loose rule let any container's WaitKamae clear the
+			// latch instantly (live bug 2026-10-15: set on 0x...02F0,
+			// cleared by 0x...6AEE0/0x...189D0). Non-zero + exact match.
+			const std::uintptr_t playerObject = HJ_GetPlayerCombatObject();
 
-			if (playerContainer == 0 ||
-				stateContainer == playerContainer)
+			if (playerObject != 0 &&
+				stateContainer == playerObject)
 			{
-				HJ::Hooks::GuardDirection::NotifyGuardEntered();
-				HJ::Hooks::GuardDirection::ScanGuardObject(
-					reinterpret_cast<std::uintptr_t>(stateObject),
-					stateContainer);
-				HJ::Hooks::GuardDirection::ScanStanceMotion(
-					stateContainer,
-					HJ::Hooks::GuardDirection::CurrentSideId());
+				if (std::strcmp(stateName, "StunMode") == 0 ||
+					std::strcmp(stateName, "PlayerRagdollMode") == 0)
+				{
+					g_playerStunned.store(true, std::memory_order_release);
+					g_playerStunnedAt.store(GetTickCount64(), std::memory_order_release);
+					HJ::Logger::Info(
+						std::format(
+							"HJ EVADE STUN LATCH: set by {} container=0x{:X}",
+							stateName,
+							stateContainer
+						)
+					);
+				}
+				else if (std::strcmp(stateName, "WaitKamae") == 0 ||
+					std::strcmp(stateName, "PlayerSway") == 0 ||
+					std::strcmp(stateName, "Guard") == 0)
+				{
+					if (g_playerStunned.exchange(false, std::memory_order_acq_rel))
+					{
+						HJ::Logger::Info(
+							std::format(
+								"HJ EVADE STUN LATCH: cleared by {} container=0x{:X}",
+								stateName,
+								stateContainer
+							)
+						);
+					}
+				}
 			}
-		}
-
-		if (stateName != nullptr &&
-			std::strcmp(stateName, "GuardReaction") == 0 &&
-			HJ::Hooks::GuardDirection::kDirectionalBlockEnabled &&
-			HJ::Hooks::GuardDirection::kGuardReactionTelemetry &&
-			HJ::Hooks::GuardDirection::CurrentSideId() != -1)
-		{
-			HJ::Hooks::GuardDirection::DumpGuardReaction(
-				reinterpret_cast<std::uintptr_t>(stateObject),
-				HJ::Hooks::GuardDirection::CurrentSideId());
 		}
 
 		if (IsTraceActive())
@@ -1555,6 +1529,33 @@ namespace HJ::Hooks::FighterCommand
 		return IsTraceActive();
 	}
 
+	bool IsPlayerStunLatched()
+	{
+		if (!g_playerStunned.load(
+			std::memory_order_acquire
+		))
+		{
+			return false;
+		}
+
+		const ULONGLONG age =
+			GetTickCount64() - g_playerStunnedAt.load(
+				std::memory_order_acquire
+			);
+
+		if (age > kStunLatchExpiryMs)
+		{
+			g_playerStunned.store(
+				false,
+				std::memory_order_release
+			);
+
+			return false;
+		}
+
+		return true;
+	}
+
 	void CancelBufferedAction()
 	{
 		// the first trigger may still be waiting outside the action buffer
@@ -1628,6 +1629,8 @@ namespace HJ::Hooks::FighterCommand
 		g_lastPlayerCombatUpdateAt.store(
 			GetTickCount64()
 		);
+
+		HJ::Hooks::GuardMotion::Tick();
 	}
 
 	bool Initialize()

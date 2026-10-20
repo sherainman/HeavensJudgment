@@ -1,4 +1,4 @@
-// vinyl disc driver: finds the record quadrants in the live uiManager
+﻿// vinyl disc driver: finds the record quadrants in the live uiManager
 // table and pushes hp into them. read-only until the dump checks out,
 // then native writes only. scene 301, layout layer row 1190.
 
@@ -33,6 +33,7 @@ namespace
 	constexpr std::uint32_t kLayoutLayerRow = 1190;
 
 	constexpr std::uint32_t kSceneLifeGauge = 0x12D; // 301
+	constexpr std::uint32_t kSceneHActJudge = 0x144; // 324 (player_can_hact_judge)
 
 	constexpr float kQuadrantX = -530.0f;
 	constexpr float kQuadrantY = 23.077f;
@@ -50,6 +51,10 @@ namespace
 		(static_cast<std::uint64_t>(1) << 32) | kSceneLifeGauge;
 	constexpr std::uint64_t kTagSceneLayout =
 		(static_cast<std::uint64_t>(7) << 32) | kSceneLifeGauge;
+	constexpr std::uint64_t kTagHActJudgeRoot =
+		(static_cast<std::uint64_t>(1) << 32) | kSceneHActJudge;
+	constexpr std::uint64_t kTagHActJudgeLayout =
+		(static_cast<std::uint64_t>(7) << 32) | kSceneHActJudge;
 
 	constexpr std::size_t kElemSlotCount = 11;
 	constexpr std::size_t kElemSlotStride = 0x90; // table-247 stride guess
@@ -226,6 +231,7 @@ namespace
 
 		int parentIndex = -1;       
 		bool sceneMember = false;    
+		bool hactJudgeMember = false;  // scene 324 (player_can_hact_judge)
 		bool cellXSize = false;      
 		int cellXHitOffset = -1;
 		float cellX = 0.0f;
@@ -438,6 +444,8 @@ namespace
 
 			if (e.sceneMember)
 				out << " <scene301>";
+			if (e.hactJudgeMember)
+				out << " <scene324>";
 
 			if (e.cellXSize)
 				out << " <<< CELL X&SIZE";
@@ -490,7 +498,49 @@ namespace
 		}
 
 		out << "  total scene-301 members: " << members << '\n';
+
+	// Scene 324 (player_can_hact_judge) tree
+	{
+		out
+			<< "\n== SCENE 324 TREE (tag low16 = 0x"
+			<< std::hex << std::uppercase << kSceneHActJudge << std::dec
+			<< ") ==\n";
+
+		members = 0;
+
+		for (const auto& e : table)
+		{
+			if (!e.hactJudgeMember)
+				continue;
+
+			members++;
+
+			out << "  " << IndexHex(e.index)
+				<< " vt=" << H8(e.vtable)
+				<< " parentIdx=";
+
+			if (e.parentIndex >= 0)
+				out << IndexHex(table[e.parentIndex].index);
+			else
+				out << "-";
+
+			out << " tag=" << H8(e.tag)
+				<< " cell=";
+
+			if (e.cell)
+				out << H8(e.cell);
+			else
+				out << "-";
+
+			if (e.cellXSize)
+				out << "  <<< CELL X&SIZE";
+
+			out << '\n';
+		}
+
+		out << "  total scene-324 members: " << members << '\n';
 	}
+}
 
 	void EmitCellHits(
 		std::ofstream& out,
@@ -519,6 +569,7 @@ namespace
 				<< " y=" << e.cellY
 				<< " size=" << e.cellSize
 				<< (e.sceneMember ? " <scene301>" : "")
+				<< (e.hactJudgeMember ? " <scene324>" : "")
 				<< '\n';
 		}
 
@@ -876,6 +927,7 @@ namespace
 				<< " tag=" << H8(entry->tag)
 				<< " parentAtU68=" << H8(entry->parent)
 				<< " sceneMember=" << (entry->sceneMember ? 1 : 0)
+				<< " hactJudge=" << (entry->hactJudgeMember ? 1 : 0)
 				<< " cellXSize=" << (entry->cellXSize ? 1 : 0)
 				<< '\n';
 
@@ -1066,6 +1118,10 @@ namespace
 			<< std::count_if(
 					table.begin(), table.end(),
 					[](const TableObj& e) { return e.sceneMember; })
+			<< " scene324="
+			<< std::count_if(
+					table.begin(), table.end(),
+					[](const TableObj& e) { return e.hactJudgeMember; })
 			<< " cellHits="
 			<< std::count_if(
 					table.begin(), table.end(),
