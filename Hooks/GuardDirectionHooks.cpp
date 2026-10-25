@@ -43,6 +43,9 @@ namespace
 	std::atomic<unsigned> g_ownerMismatchCount{ 0 };
 	std::atomic<unsigned> g_angleFailCount{ 0 };
 
+	// raw button mask from the last successful input poll.
+	std::atomic<std::uint16_t> g_cachedButtons{ 0 };
+
 	using SlotResolveFn = std::uintptr_t(__fastcall*)(std::uintptr_t);
 	using AngleFn = float*(__fastcall*)(std::uint64_t, float*, void*, void*);
 
@@ -61,18 +64,19 @@ namespace
 
 	GuardSide GetGuardSide() noexcept
 	{
-		XINPUT_STATE state{};
-
-		if (XInputGetState(0, &state) != ERROR_SUCCESS)
-			return GuardSide::None;
+		// read the snapshot the input poll already took. XInputGetState is
+		// a driver round trip, and this used to run once per live dispatch,
+		// hundreds of times a frame.
+		const std::uint16_t buttons =
+			g_cachedButtons.load(std::memory_order_relaxed);
 
 		// Circle alone holds neutral, Circle+LB left, Circle+RB right
-		const bool b = (state.Gamepad.wButtons & XINPUT_GAMEPAD_B) != 0;
+		const bool b = (buttons & XINPUT_GAMEPAD_B) != 0;
 		if (!b)
 			return GuardSide::None;
 
-		const bool lb = (state.Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
-		const bool rb = (state.Gamepad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
+		const bool lb = (buttons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
+		const bool rb = (buttons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
 
 		if (lb && !rb)
 			return GuardSide::Left;
@@ -297,6 +301,11 @@ namespace HJ::Hooks::GuardDirection
 
 		Logger::Info("Live dispatch hook installed.");
 		return true;
+	}
+
+	void UpdateGuardButtons(std::uint16_t buttons) noexcept
+	{
+		g_cachedButtons.store(buttons, std::memory_order_relaxed);
 	}
 
 	int CurrentSideId()

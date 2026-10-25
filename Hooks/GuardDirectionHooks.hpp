@@ -10,4 +10,8 @@ namespace HJ::Hooks::GuardDirection
 
 	// -1 none, 0 both, 1 left, 2 right
 	int CurrentSideId();
+
+	// publish the latest controller buttons; GetGuardSide reads this
+	// instead of calling XInput on the per-dispatch path.
+	void UpdateGuardButtons(std::uint16_t buttons) noexcept;
 }

@@ -18,6 +18,7 @@
 #include <sstream>
 #include <format>
 #include <cmath>
+#include <string>
 
 struct HJPlayerTransform
 {
@@ -39,7 +40,7 @@ namespace
 	SafetyHookInline g_swayRequestHook{};
 	SafetyHookMid g_exBoostInputHook{};
 
-	SafetyHookInline g_styleChangeHook{};
+	SafetyHookInline g_queueStyleChangeActionHook{};
 
 	constexpr std::uint32_t kBoxerStyleId = 1;
 
@@ -48,6 +49,9 @@ namespace
 
 	constexpr std::uintptr_t kCurrentStyleOffset =
 		0x68;
+
+	constexpr std::uintptr_t kQueueStyleChangeActionRva =
+		0x02F1D410;
 
 	std::atomic<std::uintptr_t>
 		g_boxerInitializedObject{ 0 };
@@ -492,57 +496,64 @@ namespace
 	}
 
 	bool TryGetNativeEvadeStateRoot(
-	std::uintptr_t combatObject,
-	std::uintptr_t& outStateRoot)
-{
-	outStateRoot = 0;
+		std::uintptr_t combatObject,
+		std::uintptr_t& outStateRoot) noexcept
+	{
+		outStateRoot = 0;
 
-	if (combatObject == 0)
-		return false;
+		if (combatObject == 0)
+			return false;
 
-	const auto moduleBase =
-		reinterpret_cast<std::uintptr_t>(
-			GetModuleHandleW(nullptr)
-		);
+		const auto moduleBase =
+			reinterpret_cast<std::uintptr_t>(
+				GetModuleHandleW(nullptr));
 
-	if (moduleBase == 0)
-		return false;
+		if (moduleBase == 0)
+			return false;
 
-	using GetContextFn =
-		std::uintptr_t(__fastcall*)(
-			std::uintptr_t
-		);
+		using GetContextFn =
+			std::uintptr_t(__fastcall*)(std::uintptr_t);
 
-	using GetStateRootFn =
-		std::uintptr_t(__fastcall*)(
-			std::uintptr_t
-		);
+		using GetStateRootFn =
+			std::uintptr_t(__fastcall*)(std::uintptr_t);
 
-	const auto getContext =
-		reinterpret_cast<GetContextFn>(
-			moduleBase + 0x02ED1270
-		);
+		const auto getContext =
+			reinterpret_cast<GetContextFn>(
+				moduleBase + 0x02ED1270);
 
-	const auto getStateRoot =
-		reinterpret_cast<GetStateRootFn>(
-			moduleBase + 0x02E97FE0
-		);
+		const auto getStateRoot =
+			reinterpret_cast<GetStateRootFn>(
+				moduleBase + 0x02E97FE0);
 
-	const std::uintptr_t context =
-		getContext(
-			combatObject + 0x30
-		);
+		if (!getContext || !getStateRoot)
+			return false;
 
-	if (context == 0)
-		return false;
+		std::uintptr_t contextVal = 0;
 
-	outStateRoot =
-		getStateRoot(
-			context
-		);
+		__try
+		{
+			contextVal = getContext(combatObject + 0x30);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
 
-	return outStateRoot != 0;
-}
+		if (contextVal == 0)
+			return false;
+
+		__try
+		{
+			outStateRoot = getStateRoot(contextVal);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			outStateRoot = 0;
+			return false;
+		}
+
+		return outStateRoot != 0;
+	}
 
 	// transition watch: the frozen words (e414 stuck at 1 through
 	// reported stuns) mean either the state lives elsewhere or the
@@ -857,7 +868,7 @@ namespace
 		return true;
 	}
 
-	bool ForceBoxerStyleState()
+	void ForceBoxerStyleState()
 	{
 		const auto base =
 			reinterpret_cast<std::uintptr_t>(
@@ -865,7 +876,7 @@ namespace
 				);
 
 		if (base == 0)
-			return false;
+			return;
 
 		std::uintptr_t runtimeState = 0;
 
@@ -879,11 +890,11 @@ namespace
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER)
 		{
-			return false;
+			return;
 		}
 
 		if (runtimeState == 0)
-			return false;
+			return;
 
 		__try
 		{
@@ -893,67 +904,50 @@ namespace
 					kCurrentStyleOffset
 					);
 
+			// dont touch garbage/loading state
 			const std::uint32_t current =
 				*style;
 
-			// dont touch garbage/loading state
 			if (current < 1 ||
 				current > 4)
 			{
-				return false;
+				return;
 			}
 
-			*style =
-				kBoxerStyleId;
+			// lock mem to boxer
+			if (current != kBoxerStyleId)
+			{
+				*style = kBoxerStyleId;
+			}
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER)
 		{
-			return false;
+			return;
 		}
-
-		return true;
 	}
 
-	void __fastcall StyleChangeHook(
+	void __fastcall QueueStyleChangeActionHook(
 		std::uintptr_t owner,
 		std::uint32_t requestedStyleId)
 	{
-		const std::uintptr_t playerObject =
-			g_playerCombatObject.load(
-				std::memory_order_acquire
-			);
-
-		if (playerObject == 0 ||
-			owner != playerObject)
+		// if game requests anything otyher than boxer id 
+		if (requestedStyleId != kBoxerStyleId)
 		{
-			g_styleChangeHook.call<void>(
-				owner,
-				requestedStyleId
-			);
-
-			return;
-		}
-
-		if (requestedStyleId !=
-			kBoxerStyleId)
-		{
-			// caller already changed +68 before getting here
-			// put it back and eat the stylechange
-			ForceBoxerStyleState();
-
 			HJ::Logger::Info(
 				std::format(
-					"HJ STYLE: blocked {}",
-					requestedStyleId
+					"HJ STYLE: overriding queue request {} -> {}",
+					requestedStyleId,
+					kBoxerStyleId
 				)
 			);
 
-			return;
+			requestedStyleId = kBoxerStyleId;
 		}
 
-		g_styleChangeHook.call<void>(
+		// call orgianl fucntion with modified id
+		g_queueStyleChangeActionHook.call<void>(
 			owner,
-			kBoxerStyleId
+			requestedStyleId
 		);
 	}
 
@@ -961,7 +955,7 @@ namespace
 		std::uintptr_t combatObject)
 	{
 		if (combatObject == 0 ||
-			!g_styleChangeHook)
+			!g_queueStyleChangeActionHook)
 		{
 			return;
 		}
@@ -972,11 +966,6 @@ namespace
 		{
 			return;
 		}
-
-		// do this even outside combat so loading a save
-		// already has boxer as current style
-		if (!ForceBoxerStyleState())
-			return;
 
 		const std::uintptr_t initializedObject =
 			g_boxerInitializedObject.load(
@@ -995,15 +984,16 @@ namespace
 		);
 
 		HJ::Logger::Info(
-			"HJ STYLE: setting initial boxer"
+			"HJ STYLE: initializing Boxer"
 		);
 
-		// run one real boxer StyleChange so the actual
-		// fighter state gets initialized too
-		g_styleChangeHook.call<void>(
+		// queue boxer natively
+		g_queueStyleChangeActionHook.call<void>(
 			combatObject,
 			kBoxerStyleId
 		);
+
+		ForceBoxerStyleState();
 	}
 
 	bool TryReadPlayerPosition(
@@ -1127,99 +1117,83 @@ namespace
 	}
 
 	std::uintptr_t ResolvePlayerEntity(
-		std::uintptr_t combatObject)
+		std::uintptr_t combatObject) noexcept
 	{
 		if (!combatObject)
 			return 0;
 
-		// FUN_142ED1270 received combatobject + 0x30 param param_1 + 8 becomes combatObject + 0x38
-		const std::uintptr_t objectA =
-			*reinterpret_cast<
-			const std::uintptr_t*>(
-				combatObject + 0x38
-				);
-
-		if (!objectA)
-			return 0;
-
-
-		const std::uintptr_t objectB =
-			*reinterpret_cast<
-			const std::uintptr_t*>(
-				objectA + 0x3C8
-				);
-
-		if (!objectB)
-			return 0;
-
-
-		const std::uint32_t handle =
-			*reinterpret_cast<
-			const std::uint32_t*>(
-				objectB + 0x0C
-				);
-
-		if (!handle)
-			return 0;
-
-
-		const std::uint32_t index =
-			handle & 0xFFFFF;
-
-		if (index >= 0x80000)
-			return 0;
-
-
-		const std::uintptr_t entryOffset =
-			static_cast<std::uintptr_t>(
-				index
-				) * 0x20;
-
-
-		const std::uintptr_t moduleBase =
-			reinterpret_cast<std::uintptr_t>(
-				GetModuleHandleW(nullptr)
-				);
-
-
-		const std::uint16_t generation =
-			*reinterpret_cast<
-			const std::uint16_t*>(
-				moduleBase +
-				kEntityGenerationTableRva +
-				entryOffset
-				);
-
-
-		const std::int16_t type =
-			*reinterpret_cast<
-			const std::int16_t*>(
-				moduleBase +
-				kEntityTypeTableRva +
-				entryOffset
-				);
-
-
-		if (generation !=
-			static_cast<std::uint16_t>(
-				handle >> 20
-				))
+		__try
 		{
-			return 0;
-		}
+			// FUN_142ED1270 received combatobject + 0x38
+			const std::uintptr_t objectA =
+				*reinterpret_cast<const std::uintptr_t*>(
+					combatObject + 0x38);
 
+			if (!objectA)
+				return 0;
 
-		if (type != 3)
-			return 0;
+			const std::uintptr_t objectB =
+				*reinterpret_cast<const std::uintptr_t*>(
+					objectA + 0x3C8);
 
+			if (!objectB)
+				return 0;
 
-		return
-			*reinterpret_cast<
-			const std::uintptr_t*>(
+			const std::uint32_t handle =
+				*reinterpret_cast<const std::uint32_t*>(
+					objectB + 0x0C);
+
+			if (!handle)
+				return 0;
+
+			const std::uint32_t index =
+				handle & 0xFFFFF;
+
+			if (index >= 0x80000)
+				return 0;
+
+			const std::uintptr_t entryOffset =
+				static_cast<std::uintptr_t>(index) * 0x20;
+
+			const std::uintptr_t moduleBase =
+				reinterpret_cast<std::uintptr_t>(
+					GetModuleHandleW(nullptr));
+
+			if (!moduleBase)
+				return 0;
+
+			const std::uint16_t generation =
+				*reinterpret_cast<const std::uint16_t*>(
+					moduleBase +
+					kEntityGenerationTableRva +
+					entryOffset);
+
+			const std::int16_t type =
+				*reinterpret_cast<const std::int16_t*>(
+					moduleBase +
+					kEntityTypeTableRva +
+					entryOffset);
+
+			if (generation !=
+				static_cast<std::uint16_t>(
+					handle >> 20))
+			{
+				return 0;
+			}
+
+			if (type != 3)
+				return 0;
+
+			return *reinterpret_cast<const std::uintptr_t*>(
 				moduleBase +
 				kEntityPointerTableRva +
-				entryOffset
-				);
+				entryOffset);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			// Unverified chain; any AV on a bad non-null pointer -> null.
+			return 0;
+		}
 	}
 
 	void __fastcall SwayRequestTraceHook(
@@ -1441,9 +1415,12 @@ namespace
 		HJ::Hooks::FighterCommand::
 			NotifyPlayerCombatUpdate();
 
-		// transition watch runs every tick; logs only on change so the
-		// tester just annotates knockdowns and the signatures show up.
-		if (HJ::Combat::IsInCombat())
+		// offset-hunt scaffolding: parked off the frame path. the probe
+		// calls and the guarding-time scan cost more than they give back.
+		constexpr bool kEvadeWatchEnabled = false;
+
+		if (kEvadeWatchEnabled &&
+			HJ::Combat::IsInCombat())
 			WatchEvadeState(combatObject);
 
 		static bool previousPhysicalA = false;
@@ -1452,6 +1429,12 @@ namespace
 
 		const bool hasController =
 			XInputGetState(0, &input) == ERROR_SUCCESS;
+
+		if (hasController)
+		{
+			HJ::Hooks::GuardDirection::UpdateGuardButtons(
+				input.Gamepad.wButtons);
+		}
 
 		const bool physicalA =
 			hasController &&
@@ -1936,6 +1919,37 @@ namespace HJ::Hooks::ActionRequest
 		);
 
 		return true;
+
+		const auto queueStyleChangeAddress =
+			base + kQueueStyleChangeActionRva;
+
+		{
+			std::ostringstream stream;
+			stream
+				<< "Installing QueueStyleChangeAction hook at 0x"
+				<< std::hex
+				<< queueStyleChangeAddress;
+			Logger::Info(stream.str());
+		}
+
+		g_queueStyleChangeActionHook =
+			safetyhook::create_inline(
+				reinterpret_cast<void*>(queueStyleChangeAddress),
+				reinterpret_cast<void*>(&QueueStyleChangeActionHook)
+			);
+
+		if (!g_queueStyleChangeActionHook)
+		{
+			Logger::Error(
+				"Failed to install QueueStyleChangeAction hook."
+			);
+
+			return false;
+		}
+
+		Logger::Info(
+			"QueueStyleChangeAction hook installed."
+		);
 	}
 
 	void NotifyEvadeAccepted(

@@ -44,54 +44,40 @@ namespace
 	bool g_warnedNoLatch = false;
 
 	constexpr std::uintptr_t kGateRva = 0x02EAAEB0;
-	constexpr std::uintptr_t kProbeRva = 0x02F00A90;
 
-	SafetyHookInline g_probeHook{};
-	std::atomic<std::uint64_t> g_probeCalls{ 0 };
+	bool TryReadByte(std::uintptr_t address, std::uint8_t& value);
+	bool TryReadUInt32(std::uintptr_t address, std::uint32_t& value);
+	bool TryReadFloat(std::uintptr_t address, float& value);
 
-	bool IsReadable(std::uintptr_t p);
-
-	void PromptProbeHook(void* self)
+	// the gate runs once per live HAct record, so it is the hottest code in
+	// the overlay. SEH instead of VirtualQuery: the old readability check
+	// was a kernel transition on every poll and cost more than the rest of
+	// the hook combined. leaf function keeps SEH out of the callers that
+	// build C++ objects.
+	bool ReadRecordIdentity(
+		void* record,
+		std::uint32_t& id,
+		std::uint32_t& prop)
 	{
-		const auto n = g_probeCalls.fetch_add(1, std::memory_order_relaxed) + 1;
+		if (!record)
+			return false;
 
-		const auto p = reinterpret_cast<std::uintptr_t>(self);
-		const auto readable = self && IsReadable(p + 0x2A);
-
-		std::uint32_t id = 0;
-		std::uint32_t prop = 0;
-		int before = -1;
-		int after = -1;
-
-		if (readable)
+		__try
 		{
-			before = *reinterpret_cast<const int*>(p + 0x2A);
+			const auto rec =
+				reinterpret_cast<std::uintptr_t>(record);
 
-			if (IsReadable(p + 0x114))
-			{
-				id = *reinterpret_cast<const std::uint32_t*>(p + 0x110);
-				prop = *reinterpret_cast<const std::uint32_t*>(p + 0x114);
-			}
+			id = *reinterpret_cast<const std::uint32_t*>(rec + 0xE0);
+			prop = *reinterpret_cast<const std::uint32_t*>(rec + 0xE4);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			id = 0;
+			prop = 0;
+			return false;
 		}
 
-		g_probeHook.call<void*>(self);
-
-		if (readable)
-			after = *reinterpret_cast<const int*>(p + 0x2A);
-
-		if (n <= 12)
-		{
-			std::ostringstream line;
-			line
-				<< "[HACT PROBE] n=" << n
-				<< " self=0x" << std::hex << p << std::dec
-				<< " id=" << id
-				<< " prop=" << prop
-				<< " flag2A " << before << "->" << after;
-
-			std::lock_guard<std::mutex> lock(g_logMutex);
-			HJ::Logger::Info(line.str());
-		}
+		return true;
 	}
 
 	SafetyHookInline g_gateHook{};
@@ -159,23 +145,53 @@ namespace
 		return *reinterpret_cast<std::uintptr_t*>(g_moduleBase + rva);
 	}
 
-	bool IsReadable(std::uintptr_t p)
+	// per-frame reads use SEH, not VirtualQuery. VirtualQuery is a kernel
+	// transition and the game's protection makes it cost milliseconds, so
+	// polling it three times a frame was the entire frame budget. these
+	// leaves keep SEH out of ComputeState, which builds no objects but is
+	// still easier to read without it.
+	bool TryReadByte(std::uintptr_t address, std::uint8_t& value)
 	{
-		if (!p)
+		__try
+		{
+			value = *reinterpret_cast<const std::uint8_t*>(
+				address);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			value = 0;
 			return false;
-		MEMORY_BASIC_INFORMATION mbi{};
-		if (VirtualQuery(reinterpret_cast<void*>(p), &mbi, sizeof(mbi)) == 0)
+		}
+	}
+
+	bool TryReadUInt32(std::uintptr_t address, std::uint32_t& value)
+	{
+		__try
+		{
+			value = *reinterpret_cast<const std::uint32_t*>(
+				address);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			value = 0;
 			return false;
-		if (mbi.State != MEM_COMMIT)
+		}
+	}
+
+	bool TryReadFloat(std::uintptr_t address, float& value)
+	{
+		__try
+		{
+			value = *reinterpret_cast<const float*>(address);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			value = 0.0f;
 			return false;
-		const auto protect = mbi.Protect & 0xFF;
-		return
-			protect == PAGE_READONLY ||
-			protect == PAGE_READWRITE ||
-			protect == PAGE_WRITECOPY ||
-			protect == PAGE_EXECUTE_READ ||
-			protect == PAGE_EXECUTE_READWRITE ||
-			protect == PAGE_EXECUTE_WRITECOPY;
+		}
 	}
 
 	struct GateSample
@@ -247,8 +263,6 @@ namespace
 	}
 
 	std::atomic<std::uint64_t> g_calls{ 0 };
-	std::atomic<std::uint64_t> g_entryPasses{ 0 };
-	std::atomic<std::uint64_t> g_returnPasses{ 0 };
 	std::atomic<std::uint64_t> g_positives{ 0 };
 	std::atomic<std::uint64_t> g_negatives{ 0 };
 	std::atomic<bool> g_lapseLogged{ false };
@@ -325,40 +339,40 @@ namespace
 		if (inHook)
 			return g_gateHook.call<std::uint64_t>(latch, record);
 
-		const auto callerRva =
-			reinterpret_cast<std::uintptr_t>(_ReturnAddress()) -
-			(g_moduleBase ? g_moduleBase : 0);
-
 		inHook = true;
 
-		const auto n = g_calls.fetch_add(1, std::memory_order_relaxed) + 1;
-		g_entryPasses.fetch_add(1, std::memory_order_relaxed);
+		const auto n =
+			g_calls.fetch_add(1, std::memory_order_relaxed) + 1;
 
-		std::uint32_t id = 0;
-		std::uint32_t prop = 0;
-
-		if (record && IsReadable(
-			reinterpret_cast<std::uintptr_t>(record) + 0xE4))
-		{
-			const auto rec = reinterpret_cast<std::uintptr_t>(record);
-			id = *reinterpret_cast<const std::uint32_t*>(rec + 0xE0);
-			prop = *reinterpret_cast<const std::uint32_t*>(rec + 0xE4);
-		}
-
-		const auto result = g_gateHook.call<std::uint64_t>(latch, record);
+		const auto result =
+			g_gateHook.call<std::uint64_t>(latch, record);
 
 		inHook = false;
 
-		g_returnPasses.fetch_add(1, std::memory_order_relaxed);
-
-		if (n <= 8)
-			LogFirstCalls(result, id, prop, callerRva);
-
+		// hot path: nearly every poll is a negative, and the overlay only
+		// acts on positives. keep this branch to an atomic and a compare --
+		// no memory reads, no formatting, no kernel calls.
 		if ((result & 0xFF) == 0)
 		{
 			g_negatives.fetch_add(1, std::memory_order_relaxed);
 
+			if (n <= 8)
+			{
+				std::uint32_t id = 0;
+				std::uint32_t prop = 0;
+				ReadRecordIdentity(record, id, prop);
+
+				LogFirstCalls(
+					result,
+					id,
+					prop,
+					reinterpret_cast<std::uintptr_t>(_ReturnAddress()) -
+						(g_moduleBase ? g_moduleBase : 0)
+				);
+			}
+
 			if (g_observed.load(std::memory_order_acquire) &&
+				!g_lapseLogged.load(std::memory_order_relaxed) &&
 				!g_lapseLogged.exchange(true, std::memory_order_acq_rel))
 			{
 				std::ostringstream line;
@@ -378,14 +392,33 @@ namespace
 
 		g_positives.fetch_add(1, std::memory_order_relaxed);
 
+		std::uint32_t id = 0;
+		std::uint32_t prop = 0;
+		ReadRecordIdentity(record, id, prop);
+
 		const auto* route = HJ::HUD::HactOverlay::FindRoute(id, prop);
 		if (!route)
 			g_unknowRoutes.fetch_add(1, std::memory_order_relaxed);
 
-		GateSample sample{};
-		SampleGate(sample);
+		// a prompt can stay available for many frames, so one line per
+		// change (or per 5s) is enough to debug with and keeps the string
+		// building off the repeat path.
+		const auto now = GetTickCount64();
+		static std::atomic<ULONGLONG> lastLog{ 0 };
+		static std::atomic<std::uint64_t> lastKey{ ~0ull };
 
+		const auto key =
+			(static_cast<std::uint64_t>(id) << 32) | prop;
+
+		if (key != lastKey.load(std::memory_order_relaxed) ||
+			now - lastLog.load(std::memory_order_relaxed) > 5000)
 		{
+			lastKey.store(key, std::memory_order_relaxed);
+			lastLog.store(now, std::memory_order_relaxed);
+
+			GateSample sample{};
+			SampleGate(sample);
+
 			std::ostringstream line;
 			line
 				<< "[HACT OVERLAY] AVAILABLE id=" << id
@@ -396,6 +429,7 @@ namespace
 				<< " suppress=" << sample.suppress
 				<< " armed=" << sample.armed
 				<< " latchId=" << sample.latchedId;
+
 			std::lock_guard<std::mutex> lock(g_logMutex);
 			HJ::Logger::Info(line.str());
 		}
@@ -403,7 +437,7 @@ namespace
 		g_lastId.store(id, std::memory_order_relaxed);
 		g_lastProp.store(prop, std::memory_order_relaxed);
 		g_lastAvailable.store(true, std::memory_order_release);
-		g_lastAt.store(GetTickCount64(), std::memory_order_release);
+		g_lastAt.store(now, std::memory_order_release);
 		g_observed.store(true, std::memory_order_release);
 
 		g_clearLogged.store(false, std::memory_order_release);
@@ -457,15 +491,15 @@ namespace HJ::HUD::HactOverlay
 			if (ctx)
 			{
 				const auto fighter = ctx + kPlayerSlotOff;
-				if (IsReadable(fighter + kHeatMax))
-				{
-					const float cur =
-						*reinterpret_cast<const float*>(fighter + kHeatCurrent);
-					const float max =
-						*reinterpret_cast<const float*>(fighter + kHeatMax);
-					const float prev =
-						*reinterpret_cast<const float*>(fighter + kHeatPrev);
 
+				float cur = 0.0f;
+				float max = 0.0f;
+				float prev = 0.0f;
+
+				if (TryReadFloat(fighter + kHeatCurrent, cur) &&
+					TryReadFloat(fighter + kHeatMax, max) &&
+					TryReadFloat(fighter + kHeatPrev, prev))
+				{
 					s.heatRatio = (max <= 0.0f) ? 0.0f : (cur / max);
 					s.tier = static_cast<int>(cur);
 					s.rose = (prev <= cur);
@@ -483,27 +517,34 @@ namespace HJ::HUD::HactOverlay
 
 		// same order as 0x142EAB760.
 		const auto flags = ReadPtr(kFlagsSlotRva);
-		if (!IsReadable(flags + kFlagMaster))
+
+		std::uint8_t master = 0;
+		std::uint8_t suppress = 0;
+
+		if (!flags ||
+			!TryReadByte(flags + kFlagMaster, master) ||
+			!TryReadByte(flags + kFlagSuppress, suppress))
 			return s;
 
-		s.masterEnable = (*reinterpret_cast<const std::uint8_t*>(
-			flags + kFlagMaster) != 0);
-		s.suppressed = (*reinterpret_cast<const std::uint8_t*>(
-			flags + kFlagSuppress) != 0);
+		s.masterEnable = master != 0;
+		s.suppressed = suppress != 0;
 
 		if (!s.masterEnable || s.suppressed)
 			return s;
 
 		const auto latch = ReadPtr(kLatchSlotRva);
-		if (!IsReadable(latch + kLatchId))
+
+		std::uint32_t latchedId = 0;
+
+		if (!latch ||
+			!TryReadUInt32(latch + kLatchId, latchedId))
 		{
 			if (!g_warnedNoLatch)
 				WarnOnce(g_warnedNoLatch, "latch block unreadable.");
 			return s;
 		}
 
-		s.latchedId = *reinterpret_cast<const std::uint32_t*>(
-			latch + kLatchId);
+		s.latchedId = latchedId;
 
 		// the latch is a single slot, so a non-zero id means ours got claimed.
 		// assumed, not verified: that it stays 0 while merely available. if
@@ -577,7 +618,6 @@ namespace HJ::HUD::HactOverlay
 				<< g_calls.load(std::memory_order_relaxed)
 				<< " positives=" << g_positives.load(std::memory_order_relaxed)
 				<< " neg=" << g_negatives.load(std::memory_order_relaxed)
-				<< " probe=" << g_probeCalls.load(std::memory_order_relaxed)
 				<< " untracked=" << g_unknowRoutes.load(std::memory_order_relaxed)
 				<< " master=" << (s.masterEnable ? 1 : 0)
 				<< " latchId=" << s.latchedId
@@ -624,27 +664,9 @@ namespace HJ::HUD::HactOverlay
 			return false;
 		}
 
-		// call frequency is the only way to tell the availability path from
-		// the execution path, since there is no vanilla popup to watch.
-		const auto probeTarget = g_moduleBase + kProbeRva;
-
-		g_probeHook = safetyhook::create_inline(
-			reinterpret_cast<void*>(probeTarget),
-			reinterpret_cast<void*>(&PromptProbeHook)
-		);
-
-		if (!g_probeHook)
-		{
-			HJ::Logger::Error(
-				"[HACT OVERLAY] frequency probe failed - "
-				"diagnostics degraded, overlay unaffected."
-			);
-		}
-
 		HJ::Logger::Info(
 			"[HACT OVERLAY] ready. 36 routes, boxing-only. "
-			"Resolver hooked on FUN_142EAAEB0 (image+0x02EAAEB0); "
-			"frequency probe on FUN_142F00A90 (image+0x02F00A90). "
+			"Resolver hooked on FUN_142EAAEB0 (image+0x02EAAEB0). "
 			"Verdict STICKY, 30s backstop. AUDIBLE CUE (scaffolding)."
 		);
 

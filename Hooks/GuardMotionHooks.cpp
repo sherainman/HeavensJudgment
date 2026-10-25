@@ -11,6 +11,8 @@
 #include <cstring>
 #include <format>
 
+#include <intrin.h>
+
 extern "C" std::uintptr_t HJ_GetPlayerCombatObject();
 
 namespace
@@ -27,10 +29,12 @@ namespace
 	constexpr std::uint32_t kGuardLoopColumn = 0x0A;
 	constexpr std::uint32_t kGuardEndColumn = 0x0C;
 
-	// the engine only reads st/lp/en once, when the GuardMiddle action starts,
-	// so a live side change has to replay that entry to get a new loop.
-	constexpr std::uintptr_t kGuardMiddleRva = 0x22745F0;
-	constexpr std::uintptr_t kGuardOwnerOffset = 0x3C8;
+	// the engine resolves st/lp/en once and hands the result to the running
+	// action, so a live side change has to start a new guard action.
+	constexpr std::uintptr_t kGuardPushRva = 0x2276580;
+	constexpr std::uintptr_t kActionQueueOffset = 0x18;
+	constexpr std::uintptr_t kGuardVtableRva = 0x35A69D0;
+	constexpr std::uintptr_t kGuardMiddleVtableRva = 0x35A6CB0;
 
 	struct GuardSet
 	{
@@ -43,7 +47,10 @@ namespace
 	constexpr GuardSet kRightGuard{ 16328, 16321, 16320 };
 
 	std::atomic<int> g_previousSide{ -2 };
-	std::atomic<bool> g_rejectLogged{ false };
+	std::atomic<bool> g_notGuardLogged{ false };
+
+	std::atomic<std::uint64_t> g_lastReadKey{ ~0ull };
+	std::atomic<int> g_readLogCount{ 0 };
 
 	bool TryReadColumnOffset(std::uintptr_t columnDesc,
 		std::uint32_t& outOffset) noexcept
@@ -60,6 +67,23 @@ namespace
 		}
 	}
 
+	void LogRead(std::uint32_t column, std::uint16_t value,
+		std::uintptr_t callerRva)
+	{
+		const std::uint64_t key =
+			(static_cast<std::uint64_t>(callerRva) << 8) | column;
+
+		if (g_lastReadKey.exchange(key, std::memory_order_relaxed) == key)
+			return;
+
+		if (g_readLogCount.fetch_add(1, std::memory_order_relaxed) >= 24)
+			return;
+
+		HJ::Logger::Info(std::format(
+			"HJ GUARD: read col=0x{:02X} val={} caller=0x{:X}",
+			column, value, callerRva));
+	}
+
 	std::uint16_t __fastcall GuardCellHook(std::uintptr_t recordSet,
 		std::uint32_t rowIndex, std::uintptr_t columnDesc)
 	{
@@ -69,12 +93,17 @@ namespace
 		if (rowIndex != kPlayerMotionRow)
 			return original;
 
-		const int sideId = HJ::Hooks::GuardDirection::CurrentSideId();
-		if (sideId != 1 && sideId != 2)
-			return original;
-
 		std::uint32_t column = 0;
 		if (!TryReadColumnOffset(columnDesc, column))
+			return original;
+
+		const auto base = reinterpret_cast<std::uintptr_t>(
+			GetModuleHandleA(nullptr));
+		LogRead(column, original,
+			reinterpret_cast<std::uintptr_t>(_ReturnAddress()) - base);
+
+		const int sideId = HJ::Hooks::GuardDirection::CurrentSideId();
+		if (sideId != 1 && sideId != 2)
 			return original;
 
 		const GuardSet& guard = sideId == 1 ? kLeftGuard : kRightGuard;
@@ -118,29 +147,43 @@ namespace HJ::Hooks::GuardMotion
 		lastAttempt = now;
 
 		const std::uintptr_t combatObject = HJ_GetPlayerCombatObject();
+		if (combatObject == 0)
+			return;
 
-		if (combatObject != 0 &&
+		const auto base = reinterpret_cast<std::uintptr_t>(
+			GetModuleHandleA(nullptr));
+
+		const std::uintptr_t action =
 			*reinterpret_cast<const std::uintptr_t*>(
-				combatObject + kGuardOwnerOffset) != 0)
+				combatObject + kActionQueueOffset);
+		const std::uintptr_t vtable = action != 0
+			? *reinterpret_cast<const std::uintptr_t*>(action)
+			: 0;
+
+		// never stomp whatever is running unless it is actually a guard.
+		if (vtable != base + kGuardVtableRva &&
+			vtable != base + kGuardMiddleVtableRva)
 		{
-			const auto base = reinterpret_cast<std::uintptr_t>(
-				GetModuleHandleA(nullptr));
-			const auto pushGuard = reinterpret_cast<bool(__fastcall*)(
-				std::uintptr_t)>(base + kGuardMiddleRva);
-
-			if (pushGuard(combatObject))
+			if (!g_notGuardLogged.exchange(true, std::memory_order_relaxed))
 			{
-				g_previousSide.store(side, std::memory_order_relaxed);
-				g_rejectLogged.store(false, std::memory_order_relaxed);
-
 				Logger::Info(std::format(
-					"HJ GUARD: side {} -> {}", previous, side));
-				return;
+					"HJ GUARD: side {} -> {}, action 0x{:X} is not a guard",
+					previous, side,
+					vtable >= base ? vtable - base : vtable));
 			}
+			return;
 		}
 
-		if (!g_rejectLogged.exchange(true, std::memory_order_relaxed))
-			Logger::Info("HJ GUARD: entry replay rejected, retrying.");
+		const auto pushGuard = reinterpret_cast<void(__fastcall*)(
+			std::uintptr_t, std::uint8_t)>(base + kGuardPushRva);
+
+		pushGuard(combatObject, 0);
+
+		g_previousSide.store(side, std::memory_order_relaxed);
+		g_notGuardLogged.store(false, std::memory_order_relaxed);
+
+		Logger::Info(std::format(
+			"HJ GUARD: side {} -> {} re-entered", previous, side));
 	}
 
 	bool Initialize()

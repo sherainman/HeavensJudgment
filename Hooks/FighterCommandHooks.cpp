@@ -844,6 +844,8 @@ namespace
 
 		if (!IsGameplayInputActive())
 		{
+			HJ::Hooks::GuardDirection::UpdateGuardButtons(0);
+
 			g_previousShoulders = {};
 			g_rtStableFrames = 0;
 			g_ltStableFrames = 0;
@@ -891,6 +893,8 @@ namespace
 
 		if (XInputGetState(0, &state) != ERROR_SUCCESS)
 		{
+			HJ::Hooks::GuardDirection::UpdateGuardButtons(0);
+
 			g_previousShoulders = {};
 			g_rtStableFrames = 0;
 			g_ltStableFrames = 0;
@@ -908,6 +912,8 @@ namespace
 
 			return result;
 		}
+
+		HJ::Hooks::GuardDirection::UpdateGuardButtons(state.Gamepad.wButtons);
 
 		// RH1 steering prototype
 		if (leftStickX != nullptr &&
@@ -1180,11 +1186,15 @@ namespace
 
 		if (XInputGetState(0, &state) != ERROR_SUCCESS)
 		{
+			HJ::Hooks::GuardDirection::UpdateGuardButtons(0);
+
 			previousA = false;
 			previousR3 = false;
 
 			return;
 		}
+
+		HJ::Hooks::GuardDirection::UpdateGuardButtons(state.Gamepad.wButtons);
 
 		const bool currentA =
 			(state.Gamepad.wButtons &

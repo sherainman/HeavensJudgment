@@ -309,6 +309,59 @@ namespace
 		inHook = false;
 	}
 
+	// the setter runs for every UI value, every frame, so an installed
+	// mid-hook is a permanent tax on the frame even with tracing off.
+	// install it only while the trace is on and reset it when it stops.
+	bool EnsureSetValueHook()
+	{
+		if (g_setValueHook)
+			return true;
+
+		if (g_moduleBase == 0)
+			return false;
+
+		const auto target =
+			g_moduleBase + kSetValueRva;
+
+		const auto* bytes =
+			reinterpret_cast<const std::uint8_t*>(target);
+
+		// mov [rsp+8],rbx ; mov [rsp+0x10],rbp ;
+		// mov [rsp+0x18],rsi ; push rdi
+		constexpr std::uint8_t kExpected[] = {
+			0x48, 0x89, 0x5C, 0x24, 0x08,
+			0x48, 0x89, 0x6C, 0x24, 0x10,
+			0x48, 0x89, 0x74, 0x24, 0x18,
+			0x57
+		};
+
+		if (std::memcmp(bytes, kExpected, sizeof(kExpected)) != 0)
+		{
+			HJ::Logger::Error(
+				"[BOXING UI TRACE] set_value address didnt match"
+			);
+
+			return false;
+		}
+
+		g_setValueHook =
+			safetyhook::create_mid(
+				reinterpret_cast<void*>(target),
+				&SetValueHook
+			);
+
+		if (!g_setValueHook)
+		{
+			HJ::Logger::Error(
+				"[BOXING UI TRACE] set_value hook failed"
+			);
+
+			return false;
+		}
+
+		return true;
+	}
+
 	void WriteCsv(const std::vector<TraceEvent>& events)
 	{
 		const char* folder =
@@ -599,29 +652,39 @@ namespace
 			{
 				if (!g_enabled.load(std::memory_order_relaxed))
 				{
-					g_writeIndex.store(
-						0,
-						std::memory_order_relaxed
-					);
+					if (!EnsureSetValueHook())
+					{
+						HJ::Logger::Error(
+							"[BOXING UI TRACE] not started: "
+							"set_value hook unavailable"
+						);
+					}
+					else
+					{
+						g_writeIndex.store(
+							0,
+							std::memory_order_relaxed
+						);
 
-					g_bufferFull.store(false);
+						g_bufferFull.store(false);
 
-					for (auto& q : g_qte)
-						q = QteCapture{};
+						for (auto& q : g_qte)
+							q = QteCapture{};
 
-					g_qteEnabled.store(
-						true,
-						std::memory_order_release
-					);
+						g_qteEnabled.store(
+							true,
+							std::memory_order_release
+						);
 
-					g_enabled.store(
-						true,
-						std::memory_order_release
-					);
+						g_enabled.store(
+							true,
+							std::memory_order_release
+						);
 
-					HJ::Logger::Info(
-						"[BOXING UI TRACE] started (F11 to stop)"
-					);
+						HJ::Logger::Info(
+							"[BOXING UI TRACE] started (F11 to stop)"
+						);
+					}
 				}
 				else
 				{
@@ -640,6 +703,9 @@ namespace
 
 					AnalyzeAndReport();
 					ReportQte();
+
+					// back to zero cost until the next trace.
+					g_setValueHook.reset();
 				}
 			}
 
@@ -668,45 +734,8 @@ namespace HJ::HUD::BoxingGaugeTrace
 			return false;
 		}
 
-		const auto target =
-			g_moduleBase + kSetValueRva;
-
-		const auto* bytes =
-			reinterpret_cast<const std::uint8_t*>(target);
-
-		// mov [rsp+8],rbx ; mov [rsp+0x10],rbp ;
-		// mov [rsp+0x18],rsi ; push rdi
-		constexpr std::uint8_t kExpected[] = {
-			0x48, 0x89, 0x5C, 0x24, 0x08,
-			0x48, 0x89, 0x6C, 0x24, 0x10,
-			0x48, 0x89, 0x74, 0x24, 0x18,
-			0x57
-		};
-
-		if (std::memcmp(bytes, kExpected, sizeof(kExpected)) != 0)
-		{
-			HJ::Logger::Error(
-				"[BOXING UI TRACE] set_value address didnt match"
-			);
-
-			return false;
-		}
-
-		g_setValueHook =
-			safetyhook::create_mid(
-				reinterpret_cast<void*>(target),
-				&SetValueHook
-			);
-
-		if (!g_setValueHook)
-		{
-			HJ::Logger::Error(
-				"[BOXING UI TRACE] set_value hook failed"
-			);
-
-			return false;
-		}
-
+		// the set_value mid-hook is installed on demand from the hotkey
+		// thread; nothing is patched until a trace is actually requested.
 		const auto thread =
 			CreateThread(
 				nullptr,
@@ -738,5 +767,7 @@ namespace HJ::HUD::BoxingGaugeTrace
 	void Shutdown()
 	{
 		g_enabled.store(false, std::memory_order_release);
+		g_qteEnabled.store(false, std::memory_order_release);
+		g_setValueHook.reset();
 	}
 }
