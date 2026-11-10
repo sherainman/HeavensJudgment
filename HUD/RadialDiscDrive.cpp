@@ -217,7 +217,9 @@ std::uintptr_t FindRadialObject(std::uint64_t* outHandle)
 {
 	*outHandle = 0;
 
-	const auto uiManager = SafeReadPtr(g_moduleBase + kUiManagerRva);
+	__try
+	{
+		const auto uiManager = SafeReadPtr(g_moduleBase + kUiManagerRva);
 	if (!uiManager)
 		return 0;
 
@@ -255,6 +257,10 @@ std::uintptr_t FindRadialObject(std::uint64_t* outHandle)
 	}
 
 	return 0;
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+	}
 }
 
 	// pod only or the compiler complains (C2712). -1 on fault.
@@ -843,8 +849,11 @@ namespace HJ::HUD::RadialDiscDrive
 	}
 
 	bool IsSceneAlive()
-	{		// throttled: full pool scan at most twice a second, cached verdict
+	{
+		// throttled: full pool scan at most twice a second, cached verdict
 		// otherwise. the present hook calls this every frame.
+		// SEH lives in ProbeRootFlag (leaf helper). No __try here — all
+		// dangerous reads are already guarded inside SEH leafs.
 		static DWORD lastTick = 0;
 		static bool lastAlive = false;
 		static std::uintptr_t cached = 0;
@@ -875,6 +884,7 @@ namespace HJ::HUD::RadialDiscDrive
 		// same throttle/cache shape. missing root fails OPEN (keeps the
 		// last verdict, true before the first scan) so a scan hiccup can
 		// never blank the disc on its own.
+		// statics + ostringstream live outside __try (C2712).
 		static DWORD lastTick = 0;
 		static bool lastShown = true;
 		static std::uintptr_t cached = 0;
@@ -889,27 +899,43 @@ namespace HJ::HUD::RadialDiscDrive
 		if (now - lastTick < 500)
 			return lastShown;
 		lastTick = now;
-		const int flag = ProbeRootFlag(cached, cachedHandle);
-		if (flag < 0)
+		// ProbeRootFlag has internal SEH: no __try needed here.
+		const int f = ProbeRootFlag(cached, cachedHandle);
+		if (f < 0)
 			return lastShown;
-		const bool shown = (static_cast<std::uint32_t>(flag) &
-			kHiddenBit) == 0;
+		const std::uint32_t flag = static_cast<std::uint32_t>(f);
+		// TEMPORARY LOGGING: capture flag values in each state (fighting, paused, main menu)
+		// to diagnose HUD visibility conditions. output on every call so all states
+		// are recorded, not just state-changes.
+		std::ostringstream m_log;
+		m_log << "[RADIAL DISC] IsHudShown: flag=0x" << std::hex << std::uppercase
+			<< flag << " shown=" << (((flag & kHiddenBit) == 0) && ((flag & 0x1) == 0));
+		HJ::Logger::Info(m_log.str());
+		const bool shown =
+			((flag & kHiddenBit) == 0 &&
+				(flag & 0x1) == 0);
 		if (shown != lastShown)
 		{
 			std::ostringstream m;
 			m << "[RADIAL DISC] hud " << (shown ? "shown." : "hidden.")
 				<< " flag=0x" << std::hex << std::uppercase
-				<< static_cast<std::uint32_t>(flag);
+				<< flag;
 			HJ::Logger::Info(m.str());
 		}
 		lastShown = shown;
 		return shown;
 	}
 
+	bool IsHudShownFallback()
+	{
+		return true;
+	}
+
 	void DumpSceneObjects()
 	{
 		// snapshot first: collect, then log, so the pool cant shift
 		// mid-dump. faults read as 0 (SafeRead), fine for diffing.
+		// All SafeRead* calls have internal SEH: no __try needed here.
 		struct Snap { std::uintptr_t obj; std::uint64_t tag; std::uint64_t handle; };
 		Snap snaps[4]{};
 		int found = 0;
@@ -980,6 +1006,9 @@ namespace HJ::HUD::RadialDiscDrive
 		if (!g_moduleBase || !std::isfinite(ratio))
 			return;
 
+		// All dangerous reads go through SEH-guarded leaf helpers
+		// (FindRadialObject, ValidateCachedObject, ReadObjectValue,
+		// TrySetValue, PokeObjectValue, ProbeSetBail). No __try here.
 		if (ratio < 0.0f)
 			ratio = 0.0f;
 

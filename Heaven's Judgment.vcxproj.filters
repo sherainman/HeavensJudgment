@@ -63,6 +63,12 @@
     <ClInclude Include="HUD\BoxingGaugeTrace.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="HUD\HactOverlay.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Hooks\GuardMotionHooks.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="external\safetyhook\safetyhook.cpp">
@@ -114,6 +120,12 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="HUD\BoxingGaugeTrace.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="HUD\HactOverlay.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Hooks\GuardMotionHooks.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

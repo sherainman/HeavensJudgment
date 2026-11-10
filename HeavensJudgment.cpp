@@ -109,7 +109,7 @@ namespace HJ
 		);
 
 		Logger::Info(
-			"HJ FEATURES: stunlatch e490 ptype entryreset"
+			"HJ FEATURES: dual-limb, guard-direction, evade, tackle."
 		);
 
 		return 0;

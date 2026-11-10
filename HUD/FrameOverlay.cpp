@@ -712,21 +712,55 @@ namespace
 		psoDesc.NumRenderTargets = 1;
 		psoDesc.RTVFormats[0] = fmt;
 		psoDesc.SampleDesc.Count = 1;
-		if (FAILED(g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_pso))))
+		bool psoOk = false;
+		__try
 		{
-			g_pso = nullptr;
-			return false;
+			if (FAILED(g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_pso))))
+			{
+				g_pso = nullptr;
+				return false;
+			}
+			psoOk = true;
 		}
-		g_psoFmt = fmt;
-		return true;
+		__except (ReportHookFault("CreatePipeline", GetExceptionCode()))
+		{
+		}
+		if (psoOk)
+		{
+			g_psoFmt = fmt;
+			return true;
+		}
+		g_pso = nullptr;
+		g_psoFmt = DXGI_FORMAT_UNKNOWN;
+		g_disabled.store(true);
+		return false;
 	}
+
+__declspec(noinline) bool EnsureBackbufferGetDesc(IDXGISwapChain* swap,
+    DXGI_SWAP_CHAIN_DESC& desc)
+{
+    __try
+    {
+        swap->GetDesc(&desc);
+        return true;
+    }
+    __except (ReportHookFault("EnsureBackbuffer", GetExceptionCode()))
+    {
+    }
+    return false;
+}
 
 	bool EnsureBackbuffer(UINT index)
 	{
 		if (index >= (UINT)kMaxBuffers || !g_device || !g_swap)
 			return false;
+		// get desc inside __try (g_swap can fault under XeSS), log outside
+		// so ostringstream never crosses an SEH boundary (C2712).
 		DXGI_SWAP_CHAIN_DESC desc{};
-		g_swap->GetDesc(&desc);
+		if (!EnsureBackbufferGetDesc(g_swap, desc))
+			return false;
+		// one-shot warning if swapchain has more buffers than we track
+		// (XeSS can create extras). ostringstream outside __try (C2712).
 		static bool loggedBufCount = false;
 		if (!loggedBufCount)
 		{
@@ -1030,143 +1064,170 @@ namespace
 		if (n == 0)
 			return false;
 
-		ID3D12GraphicsCommandList* list = g_lists[slot];
-		if (!list)
+		bool recordedOk = false;
+		__try
 		{
-			if (FAILED(g_device->CreateCommandList(0,
-				D3D12_COMMAND_LIST_TYPE_DIRECT, g_alloc[slot], g_pso,
-				IID_PPV_ARGS(&list))))
+			ID3D12GraphicsCommandList* list = g_lists[slot];
+			if (!list)
+			{
+				if (FAILED(g_device->CreateCommandList(0,
+					D3D12_COMMAND_LIST_TYPE_DIRECT, g_alloc[slot], g_pso,
+					IID_PPV_ARGS(&list))))
+					return false;
+				list->Close(); // created open; close so the Reset below is legal
+				g_lists[slot] = list;
+			}
+			if (FAILED(g_alloc[slot]->Reset()))
 				return false;
-			list->Close(); // created open; close so the Reset below is legal
-			g_lists[slot] = list;
-		}
-		if (FAILED(g_alloc[slot]->Reset()))
-			return false;
-		if (FAILED(list->Reset(g_alloc[slot], g_pso)))
-			return false;
+			if (FAILED(list->Reset(g_alloc[slot], g_pso)))
+				return false;
 
-		Barrier(list, g_bufRes[index],
-			D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-		list->OMSetRenderTargets(1, &g_rtv[index], FALSE, nullptr);
-		D3D12_VIEWPORT vp{ 0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f };
-		list->RSSetViewports(1, &vp);
-		D3D12_RECT sc{ 0, 0, (LONG)w, (LONG)h };
-		list->RSSetScissorRects(1, &sc);
-		D3D12_VERTEX_BUFFER_VIEW vbv{};
-		vbv.BufferLocation = g_vb->GetGPUVirtualAddress() +
-			slot * (UINT)(kSlotVerts * sizeof(Vertex));
-		vbv.SizeInBytes = (UINT)(n * sizeof(Vertex));
-		vbv.StrideInBytes = sizeof(Vertex);
-		list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-		list->IASetVertexBuffers(0, 1, &vbv);
-		list->DrawInstanced((UINT)n, 1, 0, 0);
-		Barrier(list, g_bufRes[index],
-			D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-		if (FAILED(list->Close()))
-			return false;
-		return true;
+			Barrier(list, g_bufRes[index],
+				D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+			list->OMSetRenderTargets(1, &g_rtv[index], FALSE, nullptr);
+			D3D12_VIEWPORT vp{ 0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f };
+			list->RSSetViewports(1, &vp);
+			D3D12_RECT sc{ 0, 0, (LONG)w, (LONG)h };
+			list->RSSetScissorRects(1, &sc);
+			D3D12_VERTEX_BUFFER_VIEW vbv{};
+			vbv.BufferLocation = g_vb->GetGPUVirtualAddress() +
+				slot * (UINT)(kSlotVerts * sizeof(Vertex));
+			vbv.SizeInBytes = (UINT)(n * sizeof(Vertex));
+			vbv.StrideInBytes = sizeof(Vertex);
+			list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			list->IASetVertexBuffers(0, 1, &vbv);
+			list->DrawInstanced((UINT)n, 1, 0, 0);
+			Barrier(list, g_bufRes[index],
+				D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+			if (FAILED(list->Close()))
+				return false;
+			recordedOk = true;
+		}
+		__except (ReportHookFault("RecordOverlay", GetExceptionCode()))
+		{
+		}
+		return recordedOk;
 	}
+
+	__declspec(noinline) void LogF12Snapshot()
+	{
+		// diagnostics only (F12). ostringstream stays out of __try (C2712).
+		bool st = false;
+		const bool known = SafeFighting(st);
+		std::ostringstream m;
+		m << "snapshot ready="
+			<< SafeBridgeReady()
+			<< " fightingKnown=" << known
+			<< " fighting=" << st
+			<< " sceneAlive="
+			<< SafeSceneAlive()
+			<< " hudShown="
+			<< SafeHudShown();
+		LogInfo(m.str());
+		SafeDumpSceneObjects();
+	}
+
+__declspec(noinline) void PresentHookBodyInner(IDXGISwapChain* swap)
+{
+        AcquireHeld();
+        if (g_swap != swap)
+        {
+            Stage(11);
+            if (g_device) { /* keep: same device usually */ }
+            g_swap = swap;
+            // new swapchain, old buffers are garbage. drop em or the
+            // disc draws into a dead surface.
+            DropBackbuffers();
+            if (!g_settingsLoaded)
+            {
+                WriteDefaults();
+                g_liveSettings = LoadSettings();
+                g_settingsLoaded = true;
+                g_settingsRev++;
+            }
+        }
+        Stage(12);
+        const DWORD now = GetTickCount();
+        if (now - g_lastF11Tick > 500)
+        {
+            g_lastF11Tick = now;
+            const bool f11 = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
+            if (f11 && !g_lastF11)
+            {
+                g_liveSettings = LoadSettings();
+                g_settingsRev++;
+                LogInfo("settings reloaded (F11).");
+            }
+            g_lastF11 = f11;
+            // F12: hud object snapshot for the ui-gate hunt. take one
+            // per ui state (hud up, phone, pause, title) and diff.
+            const bool f12 = (GetAsyncKeyState(VK_F12) & 0x8000) != 0;
+            if (f12 && !g_lastF12)
+            {
+                LogF12Snapshot();
+            }
+            g_lastF12 = f12;
+        }
+        // latch the real engine flag, not the gated one. hud shows on
+        // fight start even before the first hp update, so latching
+        // inside the gate below would deadlock it.
+        // every read below is SEH-guarded + cached: pause/title teardown
+        // must skip frames, never kill Present.
+        Stage(13);
+        bool engineFighting = false;
+        const bool engineKnown = SafeFighting(engineFighting);
+        if (engineKnown && engineFighting)
+            g_seenFighting = true;
+        else if (engineKnown && !engineFighting)
+            g_seenFighting = false;
+        const bool fightingGate = !g_liveSettings.fightingOnly ||
+            !engineKnown || engineFighting;
+        Stage(14);
+        if (g_liveSettings.enabled &&
+            (SafeBridgeReady() || g_seenFighting) &&
+            fightingGate &&
+            SafeSceneAlive() &&
+            SafeHudShown())
+        {
+            const float trueRatio = std::clamp(
+                SafeHealthRatio(),
+                0.0f, 1.0f);
+            // damage/heal triggers for the ghost + wash anims. white
+            // snaps, red trails from the pre-hit value.
+            const ULONGLONG nowMs = GetTickCount64();
+            const float eps = 0.0001f;
+            if (trueRatio < g_trackRatio - eps)
+            {
+                g_ghostFrom = g_trackRatio;
+                g_dmgT0 = nowMs;
+            }
+            else if (trueRatio > g_trackRatio + eps)
+            {
+                g_healT0 = nowMs;
+            }
+            g_trackRatio = trueRatio;
+            g_pendingRatio = trueRatio;
+            g_pendingSettings = g_liveSettings;
+            g_pendingValid = true;
+            g_presentSerial++;
+        }
+        else
+        {
+            g_pendingValid = false;
+        }
+        ReleaseHeld();
+    }
 
 	void PresentHookBody(IDXGISwapChain* swap)
 	{
 		Stage(10);
-		AcquireHeld();
-		if (g_swap != swap)
+		__try
 		{
-			Stage(11);
-			if (g_device) { /* keep: same device usually */ }
-			g_swap = swap;
-			// new swapchain, old buffers are garbage. drop em or the
-			// disc draws into a dead surface.
-			DropBackbuffers();
-			if (!g_settingsLoaded)
-			{
-				WriteDefaults();
-				g_liveSettings = LoadSettings();
-				g_settingsLoaded = true;
-				g_settingsRev++;
-			}
+			PresentHookBodyInner(swap);
 		}
-		Stage(12);
-		const DWORD now = GetTickCount();
-		if (now - g_lastF11Tick > 500)
+		__except (ReportHookFault("PresentHookBody", GetExceptionCode()))
 		{
-			g_lastF11Tick = now;
-			const bool f11 = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
-			if (f11 && !g_lastF11)
-			{
-				g_liveSettings = LoadSettings();
-				g_settingsRev++;
-				LogInfo("settings reloaded (F11).");
-			}
-			g_lastF11 = f11;
-			// F12: hud object snapshot for the ui-gate hunt. take one
-			// per ui state (hud up, phone, pause, title) and diff.
-			const bool f12 = (GetAsyncKeyState(VK_F12) & 0x8000) != 0;
-			if (f12 && !g_lastF12)
-			{
-				bool st = false;
-				const bool known = SafeFighting(st);
-				std::ostringstream m;
-				m << "snapshot ready="
-					<< SafeBridgeReady()
-					<< " fightingKnown=" << known
-					<< " fighting=" << st
-					<< " sceneAlive="
-					<< SafeSceneAlive()
-					<< " hudShown="
-					<< SafeHudShown();
-				LogInfo(m.str());
-				SafeDumpSceneObjects();
-			}
-			g_lastF12 = f12;
 		}
-		// latch the real engine flag, not the gated one. hud shows on
-		// fight start even before the first hp update, so latching
-		// inside the gate below would deadlock it.
-		// every read below is SEH-guarded + cached: pause/title teardown
-		// must skip frames, never kill Present.
-		Stage(13);
-		bool engineFighting = false;
-		const bool engineKnown = SafeFighting(engineFighting);
-		if (engineKnown && engineFighting)
-			g_seenFighting = true;
-		const bool fightingGate = !g_liveSettings.fightingOnly ||
-			!engineKnown || engineFighting;
-		Stage(14);
-		if (g_liveSettings.enabled &&
-			(SafeBridgeReady() || g_seenFighting) &&
-			fightingGate &&
-			SafeSceneAlive() &&
-			SafeHudShown())
-		{
-			const float trueRatio = std::clamp(
-				SafeHealthRatio(),
-				0.0f, 1.0f);
-				// damage/heal triggers for the ghost + wash anims. white
-				// snaps, red trails from the pre-hit value.
-				const ULONGLONG nowMs = GetTickCount64();
-				const float eps = 0.0001f;
-				if (trueRatio < g_trackRatio - eps)
-				{
-					g_ghostFrom = g_trackRatio;
-					g_dmgT0 = nowMs;
-				}
-				else if (trueRatio > g_trackRatio + eps)
-				{
-					g_healT0 = nowMs;
-				}
-				g_trackRatio = trueRatio;
-				g_pendingRatio = trueRatio;
-				g_pendingSettings = g_liveSettings;
-				g_pendingValid = true;
-				g_presentSerial++;
-			}
-			else
-			{
-				g_pendingValid = false;
-			}
-			ReleaseHeld();
 		Stage(0);
 	}
 
@@ -1348,14 +1409,32 @@ namespace
 			g_executeHook.call<void>(queue, count, lists);
 	}
 
+	// leaf helpers: no C++ objects with destructors, so SEH compiles clean.
+	// kept separate so the hooks themselves stay __try-free.
+	__declspec(noinline) void DropBackbuffersGuarded(const char* hookName)
+	{
+		__try
+		{
+			AcquireHeld();
+			for (int i = 0; i < kMaxBuffers; i++)
+			{
+				if (g_bufRes[i]) { g_bufRes[i]->Release(); g_bufRes[i] = nullptr; }
+			}
+			for (int i = 0; i < kRecSlots; i++)
+				g_keys[i].valid = false;
+			ReleaseHeld();
+		}
+		__except (ReportHookFault(hookName, GetExceptionCode()))
+		{
+		}
+	}
+
 	HRESULT WINAPI ResizeHook(IDXGISwapChain* swap, UINT count, UINT w,
 		UINT h, DXGI_FORMAT fmt, UINT flags)
 	{
 		// release before dxgi acts, or the transition can fail with our
 		// refs outstanding (thats the frozen fullscreen flip).
-		AcquireSRWLockExclusive(&g_lock);
-		DropBackbuffers();
-		ReleaseSRWLockExclusive(&g_lock);
+		DropBackbuffersGuarded("ResizeHook");
 		LogInfo("ResizeBuffers; buffers dropped.");
 		return g_resizeHook.call<HRESULT>(swap, count, w, h, fmt, flags);
 	}
@@ -1363,9 +1442,7 @@ namespace
 	HRESULT WINAPI FullscreenHook(IDXGISwapChain* swap, BOOL full,
 		IDXGIOutput* out)
 	{
-		AcquireSRWLockExclusive(&g_lock);
-		DropBackbuffers();
-		ReleaseSRWLockExclusive(&g_lock);
+		DropBackbuffersGuarded("FullscreenHook");
 		LogInfo(full ? "entering fullscreen; buffers dropped."
 			: "leaving fullscreen; buffers dropped.");
 		return g_fullscreenHook.call<HRESULT>(swap, full, out);
@@ -1374,9 +1451,7 @@ namespace
 	HRESULT WINAPI TargetHook(IDXGISwapChain* swap,
 		const DXGI_MODE_DESC* desc)
 	{
-		AcquireSRWLockExclusive(&g_lock);
-		DropBackbuffers();
-		ReleaseSRWLockExclusive(&g_lock);
+		DropBackbuffersGuarded("TargetHook");
 		LogInfo("ResizeTarget; buffers dropped.");
 		return g_targetHook.call<HRESULT>(swap, desc);
 	}

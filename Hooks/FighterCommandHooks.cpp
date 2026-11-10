@@ -1316,35 +1316,22 @@ namespace
 				_ReturnAddress()
 				);
 
-		if (stateName != nullptr &&
-			std::strcmp(stateName, "WaitKamae") == 0 &&
-			stateContainer ==
-			g_currentAttackContainer.load())
+		if (stateName != nullptr && std::strcmp(stateName, "WaitKamae") == 0 && stateContainer == g_currentAttackContainer.load())
 		{
 			TraceCadence("WaitKamae-request");
-			const std::uint32_t endingCommand =
-				g_currentAttackCommand.exchange(0);
-
-			HJ::Hooks::FighterCommand::
-				ResetCurrentAttackTracking();
+			const std::uint32_t endingCommand = g_currentAttackCommand.exchange(0);
+			HJ::Hooks::FighterCommand::ResetCurrentAttackTracking();
 
 			if (endingCommand != 0)
 			{
-				const std::uint32_t sourceCommand =
-					g_buffer.sourceCommand.load();
+				const std::uint32_t sourceCommand = g_buffer.sourceCommand.load();
+				const HJAction currentBufferAction = g_buffer.action.load();
 
-				if (sourceCommand == endingCommand)
+				// If the buffer is still holding an action (like LH), don't cancel it!
+				if (sourceCommand == endingCommand && currentBufferAction == HJAction::None)
 				{
-					HJ::Hooks::FighterCommand::
-						CancelBufferedAction();
+					HJ::Hooks::FighterCommand::CancelBufferedAction();
 				}
-
-				HJ::Logger::Info(
-					std::format(
-						"HJ ATTACK END: command=0x{:X}",
-						endingCommand
-					)
-				);
 			}
 		}
 

@@ -1313,6 +1313,10 @@ namespace
 		// without this the overlay is inert.
 		HJ::HUD::HactOverlay::GetState();
 
+		TryInitializeBoxerStyle(
+			combatObject
+		);
+
 		const std::uintptr_t previousPlayerObject =
 			g_playerCombatObject.exchange(
 				combatObject,
@@ -1453,11 +1457,7 @@ namespace
 				std::memory_order_acquire
 			) != previousEvadeSequence;
 
-		// relaxed-state snapshot: A pressed outside combat tells us what
-		// the stance bits look like with no fight running. diff these
-		// against the in-combat CHECK lines to isolate the stance flag,
-		// which the gate must then ignore (free evade out of stance is
-		// the feature, not the bug).
+		
 		if (physicalAPressed && !HJ::Combat::IsInCombat())
 		{
 			const bool probeOk =
@@ -1466,8 +1466,7 @@ namespace
 			const EvadeEntityState estate =
 				ReadEvadeEntityState();
 
-			// vtable pointer: unlocks the +0x208/+0x110 slot functions
-			// for static decompile. logged, never branched on.
+			
 			std::uintptr_t combatVtable = 0;
 			SafeReadPointer(combatObject, combatVtable);
 
@@ -1589,12 +1588,8 @@ namespace
 				combatObject
 			);
 
-			return result;
+			
 		}
-
-		TryInitializeBoxerStyle(
-			combatObject
-		);
 
 		return result;
 	}
@@ -1917,8 +1912,6 @@ namespace HJ::Hooks::ActionRequest
 		Logger::Info(
 			"Sway request trace hook installed."
 		);
-
-		return true;
 
 		const auto queueStyleChangeAddress =
 			base + kQueueStyleChangeActionRva;

@@ -1,6 +1,7 @@
 #include <Windows.h>
 
 #include "HeavensJudgment.hpp"
+#include "Core/Logger.hpp"
 
 BOOL APIENTRY DllMain(
 	HMODULE module,
@@ -22,6 +23,11 @@ BOOL APIENTRY DllMain(
 
 		if (thread)
 			CloseHandle(thread);
+	}
+
+	if (reason == DLL_PROCESS_DETACH)
+	{
+		HJ::Logger::Shutdown();
 	}
 
 	return TRUE;
