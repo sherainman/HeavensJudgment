@@ -19,17 +19,25 @@ namespace HJ::Engine
 		if (moduleBase == 0)
 			return false;
 
-		const auto runtimeState =
-			*reinterpret_cast<const std::uintptr_t*>(
-				moduleBase + kRuntimeStateGlobalRva);
+		__try
+		{
+			const auto runtimeState =
+				*reinterpret_cast<const std::uintptr_t*>(
+					moduleBase + kRuntimeStateGlobalRva);
 
-		if (runtimeState == 0)
+			if (runtimeState == 0)
+				return false;
+
+			outFighting =
+				*reinterpret_cast<const std::uint8_t*>(
+					runtimeState + kFightingOffset) != 0;
+
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			outFighting = false;
 			return false;
-
-		outFighting =
-			*reinterpret_cast<const std::uint8_t*>(
-				runtimeState + kFightingOffset) != 0;
-
-		return true;
+		}
 	}
 }

@@ -67,7 +67,26 @@ namespace
 
 	std::uint64_t ReadU64(std::uintptr_t address)
 	{
-		return *reinterpret_cast<std::uint64_t*>(address);
+		__try
+		{
+			return *reinterpret_cast<std::uint64_t*>(address);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return 0;
+		}
+	}
+
+	std::uint32_t ReadU32(std::uintptr_t address)
+	{
+		__try
+		{
+			return *reinterpret_cast<std::uint32_t*>(address);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return 0;
+		}
 	}
 
 	std::uintptr_t ResolveObject(std::uint64_t handle)
@@ -76,15 +95,14 @@ namespace
 			return 0;
 
 		const auto uiManager =
-			*reinterpret_cast<std::uintptr_t*>(
-				g_moduleBase + kUiManagerRva);
+			static_cast<std::uintptr_t>(
+				ReadU64(g_moduleBase + kUiManagerRva));
 
 		if (!uiManager)
 			return 0;
 
 		const auto capacity =
-			*reinterpret_cast<std::uint32_t*>(
-				uiManager + 0x19C);
+			ReadU32(uiManager + 0x19C);
 
 		const auto low = static_cast<std::uint32_t>(handle);
 
@@ -97,17 +115,18 @@ namespace
 			return 0;
 
 		const auto objects =
-			*reinterpret_cast<std::uintptr_t*>(
-				uiManager + 0x190);
+			static_cast<std::uintptr_t>(
+				ReadU64(uiManager + 0x190));
 
 		if (!objects)
 			return 0;
 
 		const auto object =
-			*reinterpret_cast<std::uintptr_t*>(
-				objects +
-				static_cast<std::uintptr_t>(index) *
-				sizeof(std::uintptr_t));
+			static_cast<std::uintptr_t>(
+				ReadU64(
+					objects +
+					static_cast<std::uintptr_t>(index) *
+					sizeof(std::uintptr_t)));
 
 		if (!object)
 			return 0;
@@ -249,10 +268,11 @@ namespace
 		for (std::uint32_t index = 0; index < capacity; ++index)
 		{
 			const auto object =
-				*reinterpret_cast<std::uintptr_t*>(
-					objects +
-					static_cast<std::uintptr_t>(index) *
-					sizeof(std::uintptr_t));
+				static_cast<std::uintptr_t>(
+					ReadU64(
+						objects +
+						static_cast<std::uintptr_t>(index) *
+						sizeof(std::uintptr_t)));
 
 			if (!object)
 				continue;
@@ -278,18 +298,24 @@ namespace
 			entry.sceneMember =
 				(static_cast<std::uint32_t>(entry.tag) & 0xFFFF) ==
 				kSceneLifeGauge;
+			entry.hactJudgeMember =
+				(static_cast<std::uint32_t>(entry.tag) & 0xFFFF) ==
+				kSceneHActJudge;
 
 			
 			if (entry.cell >= 0x10000 &&
 				entry.cell < 0x0000800000000000ULL)
 			{
+				const std::size_t safeCell =
+					ReadableSpan(entry.cell, kCellScanBytes);
 				float x = 0.0f;
 				float y = 0.0f;
 				float size = 0.0f;
 				int hitOff = -1;
 
-				if (ScanFloatSignature(
-						entry.cell, kCellScanBytes,
+				if (safeCell >= sizeof(float) &&
+					ScanFloatSignature(
+						entry.cell, safeCell,
 						x, y, size, hitOff))
 				{
 					entry.cellXSize = true;
@@ -347,9 +373,7 @@ namespace
 		{
 			const auto off = q * sizeof(std::uint64_t);
 
-			std::uint64_t v = 0;
-
-			std::memcpy(&v, bytes + off, sizeof(v));
+			const std::uint64_t v = ReadU64(address + off);
 
 			out
 				<< indent << "+0x"
@@ -958,8 +982,8 @@ namespace
 			return;
 
 		const auto uiManager =
-			*reinterpret_cast<std::uintptr_t*>(
-				g_moduleBase + kUiManagerRva);
+			static_cast<std::uintptr_t>(
+				ReadU64(g_moduleBase + kUiManagerRva));
 
 		if (!uiManager)
 		{
@@ -968,12 +992,11 @@ namespace
 		}
 
 		const auto capacity =
-			*reinterpret_cast<std::uint32_t*>(
-				uiManager + 0x19C);
+			ReadU32(uiManager + 0x19C);
 
 		const auto objects =
-			*reinterpret_cast<std::uintptr_t*>(
-				uiManager + 0x190);
+			static_cast<std::uintptr_t>(
+				ReadU64(uiManager + 0x190));
 
 		if (!objects || !capacity)
 		{

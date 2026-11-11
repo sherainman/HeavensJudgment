@@ -33,6 +33,24 @@ namespace
 	constexpr std::uintptr_t kHealthUpdateRva =
 		0x0275D3D3;
 
+	bool SafeMemEquals(
+		std::uintptr_t address,
+		const void* expected,
+		std::size_t size) noexcept
+	{
+		__try
+		{
+			return std::memcmp(
+				reinterpret_cast<const void*>(address),
+				expected,
+				size) == 0;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
 	void HealthUpdateHook(
 		SafetyHookContext& context)
 	{
@@ -94,18 +112,11 @@ namespace HJ::HUD::RadialHealthBridge
 		const std::uintptr_t healthTarget =
 			g_moduleBase + kHealthUpdateRva;
 
-		const auto* healthBytes =
-			reinterpret_cast<const std::uint8_t*>(healthTarget);
+		const std::uint8_t expected[] = {
+			0x48, 0x8D, 0x87, 0x90, 0x01, 0x00, 0x00
+		};
 
-		if (
-			healthBytes[0] != 0x48 ||
-			healthBytes[1] != 0x8D ||
-			healthBytes[2] != 0x87 ||
-			healthBytes[3] != 0x90 ||
-			healthBytes[4] != 0x01 ||
-			healthBytes[5] != 0x00 ||
-			healthBytes[6] != 0x00
-			)
+		if (!SafeMemEquals(healthTarget, expected, sizeof(expected)))
 		{
 			HJ::Logger::Error(
 				"[RADIAL HP] health update address didnt match"

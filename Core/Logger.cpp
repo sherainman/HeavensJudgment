@@ -13,7 +13,7 @@ namespace
 
 	// flushing every line stalls the game threads.
 	// batch it, shutdown still flushes.
-	constexpr unsigned kFlushEveryLines = 64;
+	constexpr unsigned kFlushEveryLines = 1;
 	unsigned g_linesSinceFlush = 0;
 
 	void Write(const char* level, const std::string& message)

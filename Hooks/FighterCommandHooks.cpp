@@ -1,4 +1,4 @@
-#pragma comment(lib, "Xinput.lib")
+﻿#pragma comment(lib, "Xinput.lib")
 
 #include "FighterCommandHooks.hpp"
 #include "ActionRequestsHooks.hpp"
@@ -98,13 +98,7 @@ namespace
 		g_currentAttackContainer{ 0 };
 
 
-	// stun latch: StunMode / PlayerRagdollMode own the player container while
-	// active, and no entity word was found to carry that (every watched word
-	// frozen through live stuns, native +0x208 probe true inside StunMode).
-	// event-driven, fails open: unknown = false, plus a hard expiry so a
-	// missed clear can never stick the deny on. same player-container rule
-	// as the Guard entry below; the container is logged so a misattribution
-	// would be visible, not silent.
+	// stun latch: stun mode owns the player container when active
 	std::atomic<bool>
 		g_playerStunned{ false };
 
@@ -512,42 +506,48 @@ namespace
 		if (!buttonMask || !buttonValues)
 			return;
 
-		switch (action)
+		__try
 		{
-		case HJAction::RightHand:
-			// virtual R2 token
-			*buttonMask |= 0x20;
-			 buttonValues[5] = 0xFF; 
-			g_rightHandTransportOn.store(true);
-			break; 
+			switch (action)
+			{
+			case HJAction::RightHand:
+				// virtual R2 token
+				*buttonMask |= 0x20;
+				buttonValues[5] = 0xFF;
+				g_rightHandTransportOn.store(true);
+				break;
 
-		case HJAction::LeftHand:
-			// virtual Triangle
-			*buttonMask |= 0x08;
-			buttonValues[3] = 0xFF;
-			break;
+			case HJAction::LeftHand:
+				// virtual Triangle
+				*buttonMask |= 0x08;
+				buttonValues[3] = 0xFF;
+				break;
 
-		case HJAction::RightLeg:
-			// virtual Square
-			*buttonMask |= 0x04;
-			buttonValues[2] = 0xFF;
-			break;
+			case HJAction::RightLeg:
+				// virtual Square
+				*buttonMask |= 0x04;
+				buttonValues[2] = 0xFF;
+				break;
 
-		case HJAction::LeftLeg:
-			// virtual L2 transport token
-			*buttonMask |= 0x10;
-			buttonValues[4] = 0xFF;
-			break;
+			case HJAction::LeftLeg:
+				// virtual L2 transport token
+				*buttonMask |= 0x10;
+				buttonValues[4] = 0xFF;
+				break;
 
-		case HJAction::Tackle:
-			// virtual Circle
-			*buttonMask |= 0x02;
-			buttonValues[1] = 0xFF;
-			break;
+			case HJAction::Tackle:
+				// virtual Circle
+				*buttonMask |= 0x02;
+				buttonValues[1] = 0xFF;
+				break;
 
-		default:
-			break;
+			default:
+				break;
 
+			}
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
 		}
 	}
 
@@ -809,6 +809,78 @@ namespace
 			HasBufferedFollowUp(packedCommand, action);
 	}
 
+	void SafeScaleStick(
+		float* stickX,
+		float* stickY,
+		float authority) noexcept
+	{
+		if (!stickX || !stickY)
+			return;
+
+		__try
+		{
+			*stickX *= authority;
+			*stickY *= authority;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+		}
+	}
+
+	bool SafeApplyShoulderOwnership(
+		std::uint32_t* buttonMask,
+		std::uint8_t* buttonValues,
+		bool physicalCircle) noexcept
+	{
+		constexpr std::uint32_t kLTMask = 0x10;
+		constexpr std::uint32_t kRTMask = 0x20;
+		constexpr std::uint32_t kLBMask = 0x40;
+		constexpr std::uint32_t kRBMask = 0x80;
+
+		__try
+		{
+			*buttonMask &= ~(
+				kLTMask |
+				kRTMask |
+				kLBMask |
+				kRBMask
+				);
+
+			buttonValues[4] = 0; // LT
+			buttonValues[5] = 0; // RT
+			buttonValues[6] = 0; // LB, HJ owns it now so vanilla guard never sees it
+			buttonValues[7] = 0; // RB
+
+			if (physicalCircle)
+			{
+				*buttonMask |= kLBMask;
+				buttonValues[6] = 0xFF;
+			}
+
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	void SafeSetLockOnMask(
+		std::uint32_t* buttonMask,
+		std::uint8_t* buttonValues) noexcept
+	{
+		constexpr std::uint32_t kRBMask = 0x80;
+
+		__try
+		{
+			*buttonMask |= kRBMask;
+			buttonValues[7] = 0xFF;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+		}
+	}
+
 	std::uint64_t __fastcall ControllerTranslateHook(
 		std::uint32_t controllerIndex,
 		std::uint32_t* buttonMask,
@@ -946,8 +1018,11 @@ namespace
 							elapsed
 						);
 
-					*leftStickX *= authority;
-					*leftStickY *= authority;
+					SafeScaleStick(
+						leftStickX,
+						leftStickY,
+						authority
+					);
 				}
 			}
 		}
@@ -1023,30 +1098,12 @@ namespace
 		if (ltPressed) TraceCadence("physical-LK");
 
 		// HJ owns the phys shoulder buttons
-		constexpr std::uint32_t kLTMask = 0x10;
-		constexpr std::uint32_t kRTMask = 0x20;
-		constexpr std::uint32_t kLBMask = 0x40;
-		constexpr std::uint32_t kRBMask = 0x80;
-
-		*buttonMask &= ~(
-			kLTMask |
-			kRTMask |
-			kLBMask |
-			kRBMask
-			);
-
-		buttonValues[4] = 0; // LT
-		buttonValues[5] = 0; // RT
-		buttonValues[6] = 0; // LB, HJ owns it now so vanilla guard never sees it
-		buttonValues[7] = 0; // RB
-
-		// Circle is the only block button, so it feeds native guard as a
-		// virtual L1. Which side is being held is read in the guard hook
-		// itself; all this side has to do is make the game see the press.
-		if (physicalCircle)
+		if (!SafeApplyShoulderOwnership(
+			buttonMask,
+			buttonValues,
+			physicalCircle))
 		{
-			*buttonMask |= kLBMask;
-			buttonValues[6] = 0xFF;
+			return result;
 		}
 
 		// a newer hand press replaces any trigger still waiting for its chord
@@ -1164,8 +1221,10 @@ namespace
 		if (g_lockOnEnabled.load(
 			std::memory_order_acquire))
 		{
-			*buttonMask |= kRBMask;
-			buttonValues[7] = 0xFF;
+			SafeSetLockOnMask(
+				buttonMask,
+				buttonValues
+			);
 		}
 
 		g_previousShoulders.rb = physicalRB;
@@ -1306,6 +1365,86 @@ namespace
 		return 0;
 	}
 
+	bool SafeStrEquals(
+		const char* str,
+		const char* expected) noexcept
+	{
+		const auto addr =
+			reinterpret_cast<std::uintptr_t>(str);
+
+		if (addr < 0x10000 ||
+			addr >= 0x00007FFFFFFF0000ULL ||
+			expected == nullptr)
+		{
+			return false;
+		}
+
+		__try
+		{
+			for (std::size_t i = 0; i < 64; ++i)
+			{
+				const char c1 = str[i];
+				const char c2 = expected[i];
+
+				if (c1 != c2)
+					return false;
+
+				if (c1 == '\0')
+					return true;
+			}
+
+			return false;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	void SafeCopyCString(
+		const char* str,
+		char* out,
+		std::size_t outSize) noexcept
+	{
+		if (out == nullptr || outSize == 0)
+			return;
+
+		out[0] = '\0';
+
+		if (str == nullptr)
+		{
+			strncpy_s(out, outSize, "<null>", _TRUNCATE);
+			return;
+		}
+
+		const auto addr =
+			reinterpret_cast<std::uintptr_t>(str);
+
+		if (addr < 0x10000 ||
+			addr >= 0x00007FFFFFFF0000ULL)
+		{
+			strncpy_s(out, outSize, "<nonptr>", _TRUNCATE);
+			return;
+		}
+
+		__try
+		{
+			std::size_t i = 0;
+			for (; i + 1 < outSize; ++i)
+			{
+				const char c = str[i];
+				out[i] = c;
+				if (c == '\0')
+					return;
+			}
+			out[i] = '\0';
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			strncpy_s(out, outSize, "<badptr>", _TRUNCATE);
+		}
+	}
+
 	void* __fastcall NamedStateHook(
 		std::uintptr_t stateContainer,
 		void* stateObject,
@@ -1316,7 +1455,11 @@ namespace
 				_ReturnAddress()
 				);
 
-		if (stateName != nullptr && std::strcmp(stateName, "WaitKamae") == 0 && stateContainer == g_currentAttackContainer.load())
+		const bool isWaitKamae =
+			SafeStrEquals(stateName, "WaitKamae");
+
+		if (isWaitKamae &&
+			stateContainer == g_currentAttackContainer.load())
 		{
 			TraceCadence("WaitKamae-request");
 			const std::uint32_t endingCommand = g_currentAttackCommand.exchange(0);
@@ -1347,29 +1490,35 @@ namespace
 			if (playerObject != 0 &&
 				stateContainer == playerObject)
 			{
-				if (std::strcmp(stateName, "StunMode") == 0 ||
-					std::strcmp(stateName, "PlayerRagdollMode") == 0)
+				if (SafeStrEquals(stateName, "StunMode") ||
+					SafeStrEquals(stateName, "PlayerRagdollMode"))
 				{
+					char safeName[64]{};
+					SafeCopyCString(stateName, safeName, sizeof(safeName));
+
 					g_playerStunned.store(true, std::memory_order_release);
 					g_playerStunnedAt.store(GetTickCount64(), std::memory_order_release);
 					HJ::Logger::Info(
 						std::format(
 							"HJ EVADE STUN LATCH: set by {} container=0x{:X}",
-							stateName,
+							safeName,
 							stateContainer
 						)
 					);
 				}
-				else if (std::strcmp(stateName, "WaitKamae") == 0 ||
-					std::strcmp(stateName, "PlayerSway") == 0 ||
-					std::strcmp(stateName, "Guard") == 0)
+				else if (isWaitKamae ||
+					SafeStrEquals(stateName, "PlayerSway") ||
+					SafeStrEquals(stateName, "Guard"))
 				{
 					if (g_playerStunned.exchange(false, std::memory_order_acq_rel))
 					{
+						char safeName[64]{};
+						SafeCopyCString(stateName, safeName, sizeof(safeName));
+
 						HJ::Logger::Info(
 							std::format(
 								"HJ EVADE STUN LATCH: cleared by {} container=0x{:X}",
-								stateName,
+								safeName,
 								stateContainer
 							)
 						);
@@ -1380,13 +1529,16 @@ namespace
 
 		if (IsTraceActive())
 		{
+			char safeName[64]{};
+			SafeCopyCString(stateName, safeName, sizeof(safeName));
+
 			std::ostringstream stream;
 
 			stream
 				<< "STATE TRACE +" << std::dec
 				<< GetTickCount64() - g_traceStartedAt.load() << "ms"
 				<< " name=\""
-				<< (stateName ? stateName : "<null>")
+				<< safeName
 				<< "\""
 				<< " container=0x"
 				<< std::hex
@@ -1418,8 +1570,7 @@ namespace
 
 		if (result != nullptr &&
 			result == stateObject &&
-			stateName != nullptr &&
-			std::strcmp(stateName, "PlayerSway") == 0)
+			SafeStrEquals(stateName, "PlayerSway"))
 		{
 			HJ::Hooks::ActionRequest::
 				NotifyEvadeAccepted(stateContainer);
@@ -1698,6 +1849,15 @@ namespace HJ::Hooks::FighterCommand
 					)
 			);
 
+		if (!g_checkEligibilityHook)
+		{
+			Logger::Error(
+				"Failed to install FighterCommand eligibility hook."
+			);
+
+			return false;
+		}
+
 		Logger::Info(
 			"FighterCommand eligibility hook installed."
 		);
@@ -1724,6 +1884,15 @@ namespace HJ::Hooks::FighterCommand
 					&NamedStateHook
 					)
 			);
+
+		if (!g_namedStateHook)
+		{
+			Logger::Error(
+				"Failed to install named state hook."
+			);
+
+			return false;
+		}
 
 		Logger::Info(
 			"Named state hook installed."

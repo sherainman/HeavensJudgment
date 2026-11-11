@@ -52,6 +52,20 @@ namespace
 	std::atomic<std::uint64_t> g_lastReadKey{ ~0ull };
 	std::atomic<int> g_readLogCount{ 0 };
 
+	bool SafeMemEquals(std::uintptr_t address, const void* expected,
+		std::size_t size) noexcept
+	{
+		__try
+		{
+			return std::memcmp(reinterpret_cast<const void*>(address),
+				expected, size) == 0;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
 	bool TryReadColumnOffset(std::uintptr_t columnDesc,
 		std::uint32_t& outOffset) noexcept
 	{
@@ -59,6 +73,46 @@ namespace
 		{
 			outOffset = *reinterpret_cast<const std::uint32_t*>(
 				columnDesc + 0x4);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	bool TryGetActionVtable(std::uintptr_t combatObject,
+		std::uintptr_t& outVtable) noexcept
+	{
+		outVtable = 0;
+
+		__try
+		{
+			const std::uintptr_t action =
+				*reinterpret_cast<const std::uintptr_t*>(
+					combatObject + kActionQueueOffset);
+			if (action == 0)
+				return true;
+
+			outVtable =
+				*reinterpret_cast<const std::uintptr_t*>(action);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			outVtable = 0;
+			return false;
+		}
+	}
+
+	bool SafePushGuard(std::uintptr_t base,
+		std::uintptr_t combatObject) noexcept
+	{
+		__try
+		{
+			const auto pushGuard = reinterpret_cast<void(__fastcall*)(
+				std::uintptr_t, std::uint8_t)>(base + kGuardPushRva);
+			pushGuard(combatObject, 0);
 			return true;
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER)
@@ -152,13 +206,12 @@ namespace HJ::Hooks::GuardMotion
 
 		const auto base = reinterpret_cast<std::uintptr_t>(
 			GetModuleHandleA(nullptr));
+		if (base == 0)
+			return;
 
-		const std::uintptr_t action =
-			*reinterpret_cast<const std::uintptr_t*>(
-				combatObject + kActionQueueOffset);
-		const std::uintptr_t vtable = action != 0
-			? *reinterpret_cast<const std::uintptr_t*>(action)
-			: 0;
+		std::uintptr_t vtable = 0;
+		if (!TryGetActionVtable(combatObject, vtable))
+			return;
 
 		// never stomp whatever is running unless it is actually a guard.
 		if (vtable != base + kGuardVtableRva &&
@@ -174,10 +227,8 @@ namespace HJ::Hooks::GuardMotion
 			return;
 		}
 
-		const auto pushGuard = reinterpret_cast<void(__fastcall*)(
-			std::uintptr_t, std::uint8_t)>(base + kGuardPushRva);
-
-		pushGuard(combatObject, 0);
+		if (!SafePushGuard(base, combatObject))
+			return;
 
 		g_previousSide.store(side, std::memory_order_relaxed);
 		g_notGuardLogged.store(false, std::memory_order_relaxed);
@@ -207,8 +258,8 @@ namespace HJ::Hooks::GuardMotion
 		const std::uint8_t expected[] = {
 			0x48, 0x8B, 0x41, 0x08, 0x48, 0x85, 0xC0, 0x74, 0x25
 		};
-		if (std::memcmp(reinterpret_cast<void*>(target), expected,
-			sizeof(expected)) != 0)
+
+		if (!SafeMemEquals(target, expected, sizeof(expected)))
 		{
 			Logger::Error("Guard motion hook: bytes dont match.");
 			return false;

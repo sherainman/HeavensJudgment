@@ -127,6 +127,86 @@ namespace
 	constexpr std::uint32_t kHJTackleAcquire =
 		0x00160073;
 
+	bool SafeStrEquals(
+		const char* str,
+		const char* expected) noexcept
+	{
+		const auto addr =
+			reinterpret_cast<std::uintptr_t>(str);
+
+		if (addr < 0x10000 ||
+			addr >= 0x00007FFFFFFF0000ULL ||
+			expected == nullptr)
+		{
+			return false;
+		}
+
+		__try
+		{
+			for (std::size_t i = 0; i < 64; ++i)
+			{
+				const char c1 = str[i];
+				const char c2 = expected[i];
+
+				if (c1 != c2)
+					return false;
+
+				if (c1 == '\0')
+					return true;
+			}
+
+			return false;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	void SafeCopyCString(
+		const char* str,
+		char* out,
+		std::size_t outSize) noexcept
+	{
+		if (out == nullptr || outSize == 0)
+			return;
+
+		out[0] = '\0';
+
+		if (str == nullptr)
+		{
+			strncpy_s(out, outSize, "<null>", _TRUNCATE);
+			return;
+		}
+
+		const auto addr =
+			reinterpret_cast<std::uintptr_t>(str);
+
+		if (addr < 0x10000 ||
+			addr >= 0x00007FFFFFFF0000ULL)
+		{
+			strncpy_s(out, outSize, "<nonptr>", _TRUNCATE);
+			return;
+		}
+
+		__try
+		{
+			std::size_t i = 0;
+			for (; i + 1 < outSize; ++i)
+			{
+				const char c = str[i];
+				out[i] = c;
+				if (c == '\0')
+					return;
+			}
+			out[i] = '\0';
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			strncpy_s(out, outSize, "<badptr>", _TRUNCATE);
+		}
+	}
+
 	void __fastcall AttackBehaviorHook(
 		std::uintptr_t container,
 		std::uint32_t packedCommand,
@@ -139,8 +219,7 @@ namespace
 
 		const bool isPlayerAttack =
 			caller == 0x142EFC750 &&
-			stateName != nullptr &&
-			std::strcmp(stateName, "Attack") == 0;
+			SafeStrEquals(stateName, "Attack");
 
 
 		// HJ right leg uses square as its internal token in fightercommand, rt synthesizes square 
@@ -236,12 +315,15 @@ namespace
 						packedCommand
 					);
 
+				char safeName[64]{};
+				SafeCopyCString(stateName, safeName, sizeof(safeName));
+
 				std::ostringstream stream;
 
 				stream
 					<< "ATTACK REQUEST"
 					<< " name=\""
-					<< (stateName ? stateName : "<null>")
+					<< safeName
 					<< "\""
 					<< " container=0x"
 					<< std::hex
@@ -277,6 +359,44 @@ namespace
 		}
 	}
 
+
+	bool SafeMemEquals(
+		std::uintptr_t address,
+		const void* expected,
+		std::size_t size) noexcept
+	{
+		__try
+		{
+			return std::memcmp(
+				reinterpret_cast<const void*>(address),
+				expected,
+				size) == 0;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	bool SafeCallSwayRequest(
+		std::uintptr_t fnAddress,
+		std::uintptr_t combatObject) noexcept
+	{
+		using HandleSwayRequestFn =
+			void(__fastcall*)(std::uintptr_t);
+
+		__try
+		{
+			reinterpret_cast<HandleSwayRequestFn>(fnAddress)(
+				combatObject
+			);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
 
 	bool SafeReadByte(
 		std::uintptr_t address,
@@ -462,7 +582,14 @@ namespace
 	bool ProbeNativeEvadeEligibility(
 		std::uintptr_t combatObject)
 	{
-		return ProbeSwayAllowed(combatObject, 1);
+		__try
+		{
+			return ProbeSwayAllowed(combatObject, 1);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
 	}
 
 	bool TryReadEvadeStateFlag(
@@ -828,10 +955,7 @@ namespace
 			0xE8
 		};
 
-		if (std::memcmp(
-			reinterpret_cast<void*>(boxerCheck),
-			expected,
-			sizeof(expected)) != 0)
+		if (!SafeMemEquals(boxerCheck, expected, sizeof(expected)))
 		{
 			HJ::Logger::Error(
 				"boxer availability bytes dont match"
@@ -930,8 +1054,14 @@ namespace
 		std::uintptr_t owner,
 		std::uint32_t requestedStyleId)
 	{
-		// if game requests anything otyher than boxer id 
-		if (requestedStyleId != kBoxerStyleId)
+		const std::uintptr_t playerObject =
+			g_playerCombatObject.load(
+				std::memory_order_acquire
+			);
+
+		if (playerObject != 0 &&
+			owner == playerObject &&
+			requestedStyleId != kBoxerStyleId)
 		{
 			HJ::Logger::Info(
 				std::format(
@@ -949,6 +1079,24 @@ namespace
 			owner,
 			requestedStyleId
 		);
+	}
+
+	bool SafeCallQueueStyleChange(
+		std::uintptr_t combatObject,
+		std::uint32_t styleId) noexcept
+	{
+		__try
+		{
+			g_queueStyleChangeActionHook.call<void>(
+				combatObject,
+				styleId
+			);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
 	}
 
 	void TryInitializeBoxerStyle(
@@ -988,7 +1136,7 @@ namespace
 		);
 
 		// queue boxer natively
-		g_queueStyleChangeActionHook.call<void>(
+		SafeCallQueueStyleChange(
 			combatObject,
 			kBoxerStyleId
 		);
@@ -1307,15 +1455,8 @@ namespace
 	std::uint8_t __fastcall PlayerCombatUpdateHook(
 		std::uintptr_t combatObject)
 	{
-		// Poll the HAct overlay from the per-frame combat tick. This is
-		// what drives its heartbeat diagnostics and, once a renderer
-		// exists, its draw state. Nothing else calls GetState(), so
-		// without this the overlay is inert.
+		// polls the hact overlay
 		HJ::HUD::HactOverlay::GetState();
-
-		TryInitializeBoxerStyle(
-			combatObject
-		);
 
 		const std::uintptr_t previousPlayerObject =
 			g_playerCombatObject.exchange(
@@ -1416,6 +1557,10 @@ namespace
 			}
 		}
 
+		TryInitializeBoxerStyle(
+			combatObject
+		);
+
 		HJ::Hooks::FighterCommand::
 			NotifyPlayerCombatUpdate();
 
@@ -1475,7 +1620,6 @@ namespace
 					"HJ EVADE RELAXED: ent=0x{:X} vt=0x{:X} probe={} e3c=0x{:X}({}) bit6={} e414={}({})",
 					static_cast<unsigned long long>(estate.entity),
 					static_cast<unsigned long long>(combatVtable),
-					static_cast<unsigned long long>(estate.entity),
 					probeOk,
 					static_cast<unsigned int>(estate.e3c),
 					estate.hasE3C,
@@ -1557,9 +1701,6 @@ namespace
 			// direct A evade also works outside lock-on stance
 			// the PlayerSway callback confirms whether it was accepted
 
-			using HandleSwayRequestFn =
-				void(__fastcall*)(std::uintptr_t);
-
 			constexpr std::uintptr_t
 				kHandleSwayRequestRva =
 				0x02F1ED80;
@@ -1569,11 +1710,8 @@ namespace
 					GetModuleHandleW(nullptr)
 					);
 
-			const auto handleSwayRequest =
-				reinterpret_cast<HandleSwayRequestFn>(
-					moduleBase +
-					kHandleSwayRequestRva
-					);
+			if (moduleBase == 0)
+				return result;
 
 			HJ::Logger::Info(
 				std::format(
@@ -1584,7 +1722,8 @@ namespace
 				)
 			);
 
-			handleSwayRequest(
+			SafeCallSwayRequest(
+				moduleBase + kHandleSwayRequestRva,
 				combatObject
 			);
 
@@ -1668,30 +1807,27 @@ void HJ::Hooks::ActionRequest::TraceAttackObject(
 	std::uintptr_t caller)
 {
 	if (stateObject == nullptr ||
-		stateName == nullptr ||
-		std::strcmp(stateName, "Attack") != 0 ||
+		!SafeStrEquals(stateName, "Attack") ||
 		caller != 0x142F22305)
 	{
 		return;
 	}
 
-	const auto objectBytes =
-		reinterpret_cast<std::uint8_t*>(
+	const auto objectAddress =
+		reinterpret_cast<std::uintptr_t>(
 			stateObject
 			);
 
-	const std::uint32_t field78 =
-		*reinterpret_cast<std::uint32_t*>(
-			objectBytes + 0x78
-			);
+	std::uint32_t field78 = 0;
+	std::int32_t fieldB4 = 0;
+	std::uint8_t fieldC7 = 0;
 
-	const std::int32_t fieldB4 =
-		*reinterpret_cast<std::int32_t*>(
-			objectBytes + 0xB4
-			);
-
-	const std::uint8_t fieldC7 =
-		*(objectBytes + 0xC7);
+	if (!SafeReadU32(objectAddress + 0x78, field78) ||
+		!SafeReadI32(objectAddress + 0xB4, fieldB4) ||
+		!SafeReadByte(objectAddress + 0xC7, fieldC7))
+	{
+		return;
+	}
 
 	std::ostringstream stream;
 
@@ -1794,10 +1930,10 @@ namespace HJ::Hooks::ActionRequest
 			0x5F, 0x5E, 0x5B, 0xC3
 		};
 
-		if (std::memcmp(
-			reinterpret_cast<const void*>(exBoostInputAddress - 7),
+		if (!SafeMemEquals(
+			exBoostInputAddress - 7,
 			exBoostInputBytes,
-			sizeof(exBoostInputBytes)) != 0)
+			sizeof(exBoostInputBytes)))
 		{
 			Logger::Error(
 				"EX boost input signature does not match."
@@ -1846,6 +1982,15 @@ namespace HJ::Hooks::ActionRequest
 					)
 			);
 
+		if (!g_attackBehaviorHook)
+		{
+			Logger::Error(
+				"Failed to install action request hook."
+			);
+
+			return false;
+		}
+
 		Logger::Info(
 			"Action request hook installed."
 		);
@@ -1872,6 +2017,15 @@ namespace HJ::Hooks::ActionRequest
 					&PlayerCombatUpdateHook
 					)
 			);
+
+		if (!g_playerCombatUpdateHook)
+		{
+			Logger::Error(
+				"Failed to install player combat update hook."
+			);
+
+			return false;
+		}
 
 		Logger::Info(
 			"Player combat update hook installed."
@@ -1943,6 +2097,8 @@ namespace HJ::Hooks::ActionRequest
 		Logger::Info(
 			"QueueStyleChangeAction hook installed."
 		);
+
+		return true;
 	}
 
 	void NotifyEvadeAccepted(

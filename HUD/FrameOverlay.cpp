@@ -370,6 +370,10 @@ namespace
 
 	IDXGISwapChain* g_swap = nullptr;
 	ID3D12Device* g_device = nullptr;
+	ID3D12CommandQueue* g_queue = nullptr;
+	ID3D12Fence* g_fence = nullptr;
+	UINT64 g_fenceValue = 0;
+	UINT64 g_slotFence[kRecSlots]{};
 	ID3D12DescriptorHeap* g_rtvHeap = nullptr;
 	ID3D12CommandAllocator* g_alloc[kRecSlots]{};
 	ID3D12GraphicsCommandList* g_lists[kRecSlots]{};
@@ -663,6 +667,7 @@ namespace
 			g_disabled.store(true);
 			return false;
 		}
+		g_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&g_fence));
 
 		LogInfo("device resources ready.");
 		return true;
@@ -957,7 +962,7 @@ __declspec(noinline) bool EnsureBackbufferGetDesc(IDXGISwapChain* swap,
 			dx = sx * fx - 1.0f;
 			dy = 1.0f - sy * fy;
 		};
-		Vertex tmp[kSlotVerts];
+		static Vertex tmp[kSlotVerts];
 		int m = 0;
 		const double a0 = -kPi / 2.0;
 		if (drawBase)
@@ -1215,6 +1220,140 @@ __declspec(noinline) void PresentHookBodyInner(IDXGISwapChain* swap)
         {
             g_pendingValid = false;
         }
+
+        if (g_pendingValid && g_swap && g_queue && EnsureDevice(g_swap))
+        {
+            Stage(22);
+            UINT idx = 0;
+            IDXGISwapChain3* swap3 = nullptr;
+            if (SUCCEEDED(g_swap->QueryInterface(
+                IID_PPV_ARGS(&swap3))) && swap3)
+            {
+                idx = swap3->GetCurrentBackBufferIndex();
+                swap3->Release();
+            }
+            ID3D12GraphicsCommandList* hitList = nullptr;
+            int hitSlot = -1;
+            Stage(23);
+            if (EnsureBackbuffer(idx))
+            {
+                Stage(24);
+                int bucket = (int)(g_pendingRatio * 2048.0f);
+                const double frac = g_pendingSettings.lowHPFrac;
+                const double hz = g_pendingSettings.pulseHz;
+                if (frac > 0.0 && g_pendingRatio < (float)frac)
+                    g_lowLatched = true;
+                else if (frac <= 0.0 || g_pendingRatio > (float)(frac + 0.02))
+                    g_lowLatched = false;
+                float pulsePhase = -1.0f;
+                int phaseQ = 0;
+                if (g_lowLatched && hz > 0.0)
+                {
+                    const double t = GetTickCount64() / 1000.0;
+                    pulsePhase = 0.5f + 0.5f * static_cast<float>(
+                        std::sin(2.0 * kPi * hz * t));
+                    phaseQ = static_cast<int>(pulsePhase * 15.999f);
+                }
+                const ULONGLONG nowMs = GetTickCount64();
+                const float trueRatio = g_pendingRatio;
+                float ghost = trueRatio;
+                float dmgA = 0.0f, healA = 0.0f;
+                const double gs = g_pendingSettings.dmgGhostSec;
+                if (gs > 0.0 && nowMs >= g_dmgT0)
+                {
+                    const double el = (nowMs - g_dmgT0) / 1000.0;
+                    if (el < gs && g_ghostFrom > trueRatio)
+                        ghost = trueRatio + (g_ghostFrom - trueRatio) *
+                            static_cast<float>(1.0 - el / gs);
+                }
+                const double ps = g_pendingSettings.dmgPulseSec;
+                if (ps > 0.0 && nowMs >= g_dmgT0)
+                {
+                    const double el = (nowMs - g_dmgT0) / 1000.0;
+                    if (el < ps) dmgA = static_cast<float>(1.0 - el / ps);
+                }
+                const double hs = g_pendingSettings.healSec;
+                if (hs > 0.0 && nowMs >= g_healT0)
+                {
+                    const double el = (nowMs - g_healT0) / 1000.0;
+                    if (el < hs) healA = static_cast<float>(1.0 - el / hs);
+                }
+                if (ghost > trueRatio + 0.0005f ||
+                    dmgA > 0.003f || healA > 0.003f)
+                    phaseQ = static_cast<int>((g_presentSerial & 63) + 128);
+                int slot = -1;
+                for (int i = 0; i < kRecSlots; i++)
+                {
+                    if (g_keys[i].valid && g_keys[i].buf == idx &&
+                        g_keys[i].w == g_bufW && g_keys[i].h == g_bufH &&
+                        g_keys[i].aspectQ == g_aspectQ &&
+                        g_keys[i].bucket == bucket &&
+                        g_keys[i].phaseQ == phaseQ &&
+                        g_keys[i].settingsRev == g_settingsRev)
+                    {
+                        slot = i;
+                        break;
+                    }
+                }
+                if (slot < 0)
+                {
+                    int oldest = 0;
+                    for (int i = 0; i < kRecSlots; i++)
+                    {
+                        if (!g_keys[i].valid)
+                        {
+                            oldest = i;
+                            break;
+                        }
+                        if (g_slotSerial[i] < g_slotSerial[oldest])
+                            oldest = i;
+                    }
+                    const bool fenceDone = !g_fence ||
+                        g_slotFence[oldest] == 0 ||
+                        g_fence->GetCompletedValue() >= g_slotFence[oldest];
+                    if ((!g_keys[oldest].valid ||
+                        g_slotSerial[oldest] + kSlotMinAge <= g_presentSerial) &&
+                        fenceDone)
+                    {
+                        slot = oldest;
+                        if (RecordOverlay(idx, slot, g_pendingRatio,
+                            pulsePhase, ghost, dmgA, healA,
+                            g_pendingSettings, g_bufW, g_bufH))
+                        {
+                            g_keys[slot] = { idx, g_bufW, g_bufH, g_aspectQ,
+                                bucket, phaseQ, g_settingsRev, true };
+                        }
+                        else
+                        {
+                            slot = -1;
+                        }
+                    }
+                }
+                if (slot >= 0 && g_lists[slot])
+                {
+                    g_slotSerial[slot] = g_presentSerial;
+                    hitList = g_lists[slot];
+                    hitSlot = slot;
+                }
+            }
+            if (hitList)
+            {
+                Stage(25);
+                ID3D12CommandList* cmdList = hitList;
+                g_executeHook.call<void>(g_queue, 1, &cmdList);
+                if (g_fence && hitSlot >= 0)
+                {
+                    const UINT64 fv = ++g_fenceValue;
+                    if (SUCCEEDED(g_queue->Signal(g_fence, fv)))
+                        g_slotFence[hitSlot] = fv;
+                }
+                if (!g_loggedInject)
+                {
+                    g_loggedInject = true;
+                    LogCStr("first injection ok.");
+                }
+            }
+        }
         ReleaseHeld();
     }
 
@@ -1247,166 +1386,24 @@ __declspec(noinline) void PresentHookBodyInner(IDXGISwapChain* swap)
 	void WINAPI ExecuteHook(ID3D12CommandQueue* queue, UINT count,
 		ID3D12CommandList* const* lists)
 	{
-		bool injected = false;
-		if (!g_disabled.load() && queue && count < 60)
+		if (!g_disabled.load() && queue && count > 0)
 		__try
 		{
 			Stage(20);
 			D3D12_COMMAND_QUEUE_DESC qd = queue->GetDesc();
-			if (qd.Type == D3D12_COMMAND_LIST_TYPE_DIRECT)
+			if (qd.Type == D3D12_COMMAND_LIST_TYPE_DIRECT && g_queue != queue)
 			{
 				Stage(21);
 				AcquireHeld();
-				// late game passes paint over an early injection so this goes
-				// in every submit. steady hp just reuses the cached list.
-				if (g_pendingValid && g_swap && EnsureDevice(g_swap))
-				{
-					Stage(22);
-					UINT idx = 0;
-					IDXGISwapChain3* swap3 = nullptr;
-					if (SUCCEEDED(g_swap->QueryInterface(
-						IID_PPV_ARGS(&swap3))) && swap3)
-					{
-						idx = swap3->GetCurrentBackBufferIndex();
-						swap3->Release();
-					}
-					ID3D12GraphicsCommandList* hitList = nullptr;
-					Stage(23);
-					if (EnsureBackbuffer(idx))
-					{
-						Stage(24);
-						int bucket = (int)(g_pendingRatio * 2048.0f);
-						// low hp latch with a little hysteresis so the rim
-						// doesnt flicker at the boundary.
-						const double frac = g_pendingSettings.lowHPFrac;
-						const double hz = g_pendingSettings.pulseHz;
-						if (frac > 0.0 && g_pendingRatio < (float)frac)
-							g_lowLatched = true;
-						else if (frac <= 0.0 || g_pendingRatio > (float)(frac + 0.02))
-							g_lowLatched = false;
-						float pulsePhase = -1.0f;
-						int phaseQ = 0;
-						if (g_lowLatched && hz > 0.0)
-						{
-							const double t = GetTickCount64() / 1000.0;
-							pulsePhase = 0.5f + 0.5f * static_cast<float>(
-								std::sin(2.0 * kPi * hz * t));
-							phaseQ = static_cast<int>(pulsePhase * 15.999f);
-						}
-						// hit/heal anims decay off their trigger timestamps.
-						// anything live forces a fresh record per frame (key
-						// carries the frame serial, so submits within one
-						// frame still share the list).
-						const ULONGLONG nowMs = GetTickCount64();
-						const float trueRatio = g_pendingRatio;
-						float ghost = trueRatio;
-						float dmgA = 0.0f, healA = 0.0f;
-						const double gs = g_pendingSettings.dmgGhostSec;
-						if (gs > 0.0 && nowMs >= g_dmgT0)
-						{
-							const double el = (nowMs - g_dmgT0) / 1000.0;
-							if (el < gs && g_ghostFrom > trueRatio)
-								ghost = trueRatio + (g_ghostFrom - trueRatio) *
-									static_cast<float>(1.0 - el / gs);
-						}
-						const double ps = g_pendingSettings.dmgPulseSec;
-						if (ps > 0.0 && nowMs >= g_dmgT0)
-						{
-							const double el = (nowMs - g_dmgT0) / 1000.0;
-							if (el < ps) dmgA = static_cast<float>(1.0 - el / ps);
-						}
-						const double hs = g_pendingSettings.healSec;
-						if (hs > 0.0 && nowMs >= g_healT0)
-						{
-							const double el = (nowMs - g_healT0) / 1000.0;
-							if (el < hs) healA = static_cast<float>(1.0 - el / hs);
-						}
-						if (ghost > trueRatio + 0.0005f ||
-							dmgA > 0.003f || healA > 0.003f)
-							phaseQ = static_cast<int>((g_presentSerial & 63) + 128);
-						int slot = -1;
-						for (int i = 0; i < kRecSlots; i++)
-						{
-							if (g_keys[i].valid && g_keys[i].buf == idx &&
-								g_keys[i].w == g_bufW && g_keys[i].h == g_bufH &&
-								g_keys[i].aspectQ == g_aspectQ &&
-								g_keys[i].bucket == bucket &&
-								g_keys[i].phaseQ == phaseQ &&
-								g_keys[i].settingsRev == g_settingsRev)
-							{
-								slot = i;
-								break;
-							}
-						}
-						if (slot < 0)
-						{
-							int oldest = 0;
-							for (int i = 0; i < kRecSlots; i++)
-							{
-								if (!g_keys[i].valid)
-								{
-									oldest = i;
-									break;
-								}
-								if (g_slotSerial[i] < g_slotSerial[oldest])
-									oldest = i;
-							}
-							if (!g_keys[oldest].valid ||
-								g_slotSerial[oldest] + kSlotMinAge <= g_presentSerial)
-							{
-								slot = oldest;
-								if (RecordOverlay(idx, slot, g_pendingRatio,
-									pulsePhase, ghost, dmgA, healA,
-									g_pendingSettings, g_bufW, g_bufH))
-								{
-									g_keys[slot] = { idx, g_bufW, g_bufH, g_aspectQ,
-										bucket, phaseQ, g_settingsRev, true };
-								}
-								else
-								{
-									slot = -1;
-								}
-							}
-						}
-						if (slot >= 0 && g_lists[slot])
-						{
-							g_slotSerial[slot] = g_presentSerial;
-							hitList = g_lists[slot];
-						}
-					}
-					if (hitList)
-					{
-						Stage(25);
-						ID3D12CommandList* merged[65];
-						for (UINT i = 0; i < count; i++)
-							merged[i] = const_cast<ID3D12CommandList*>(lists[i]);
-						merged[count] = hitList;
-						ReleaseHeld();
-						g_executeHook.call<void>(queue, count + 1, merged);
-						injected = true;
-						if (!g_loggedInject)
-						{
-							g_loggedInject = true;
-							LogCStr("first injection ok.");
-						}
-					}
-					else
-					{
-						ReleaseHeld();
-					}
-				}
-				else
-				{
-					ReleaseHeld();
-				}
+				g_queue = queue;
+				ReleaseHeld();
 			}
 			Stage(0);
 		}
 		__except (ReportHookFault("ExecuteHook", GetExceptionCode()))
 		{
 		}
-		if (!injected)
-			g_executeHook.call<void>(queue, count, lists);
+		g_executeHook.call<void>(queue, count, lists);
 	}
 
 	// leaf helpers: no C++ objects with destructors, so SEH compiles clean.

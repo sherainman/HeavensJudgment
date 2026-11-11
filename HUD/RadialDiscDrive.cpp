@@ -256,15 +256,19 @@ std::uintptr_t FindRadialObject(std::uint64_t* outHandle)
 		return object;
 	}
 
-	return 0;
+		return 0;
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER)
 	{
+		return 0;
 	}
 }
 
 	// pod only or the compiler complains (C2712). -1 on fault.
-	int ProbeRootFlag(std::uintptr_t& cached, std::uint64_t& cachedHandle)
+	int ProbeRootFlag(
+		std::uintptr_t& cached,
+		std::uint64_t& cachedHandle,
+		bool allowScan = true)
 	{
 		if (cached)
 		{
@@ -286,6 +290,8 @@ std::uintptr_t FindRadialObject(std::uint64_t* outHandle)
 			cached = 0;
 			cachedHandle = 0;
 		}
+		if (!allowScan)
+			return -1;
 		const auto uiManager = SafeReadPtr(g_moduleBase + kUiManagerRva);
 		if (!uiManager)
 			return -1;
@@ -850,10 +856,8 @@ namespace HJ::HUD::RadialDiscDrive
 
 	bool IsSceneAlive()
 	{
-		// throttled: full pool scan at most twice a second, cached verdict
-		// otherwise. the present hook calls this every frame.
-		// SEH lives in ProbeRootFlag (leaf helper). No __try here — all
-		// dangerous reads are already guarded inside SEH leafs.
+		// cached root is checked every frame; full pool scan is throttled
+		// to at most twice a second when uncached.
 		static DWORD lastTick = 0;
 		static bool lastAlive = false;
 		static std::uintptr_t cached = 0;
@@ -865,10 +869,13 @@ namespace HJ::HUD::RadialDiscDrive
 		if (!g_moduleBase)
 			return false;
 		const DWORD now = GetTickCount();
-		if (now - lastTick < 500)
-			return lastAlive;
-		lastTick = now;
-		const bool alive = ProbeRootFlag(cached, cachedHandle) >= 0;
+		const bool allowScan = (now - lastTick >= 500);
+		if (allowScan && !cached)
+			lastTick = now;
+		const int f = ProbeRootFlag(cached, cachedHandle, allowScan);
+		if (f < 0 && !allowScan)
+			return false;
+		const bool alive = f >= 0;
 		if (alive != lastAlive)
 		{
 			HJ::Logger::Info(alive ?
@@ -881,10 +888,8 @@ namespace HJ::HUD::RadialDiscDrive
 
 	bool IsHudShown()
 	{
-		// same throttle/cache shape. missing root fails OPEN (keeps the
-		// last verdict, true before the first scan) so a scan hiccup can
-		// never blank the disc on its own.
-		// statics + ostringstream live outside __try (C2712).
+		// cached root is checked every frame so pause/menu transitions
+		// hide the disc immediately; full pool scan is throttled when uncached.
 		static DWORD lastTick = 0;
 		static bool lastShown = true;
 		static std::uintptr_t cached = 0;
@@ -896,21 +901,13 @@ namespace HJ::HUD::RadialDiscDrive
 		if (!g_moduleBase)
 			return lastShown;
 		const DWORD now = GetTickCount();
-		if (now - lastTick < 500)
-			return lastShown;
-		lastTick = now;
-		// ProbeRootFlag has internal SEH: no __try needed here.
-		const int f = ProbeRootFlag(cached, cachedHandle);
+		const bool allowScan = (now - lastTick >= 500);
+		if (allowScan && !cached)
+			lastTick = now;
+		const int f = ProbeRootFlag(cached, cachedHandle, allowScan);
 		if (f < 0)
 			return lastShown;
 		const std::uint32_t flag = static_cast<std::uint32_t>(f);
-		// TEMPORARY LOGGING: capture flag values in each state (fighting, paused, main menu)
-		// to diagnose HUD visibility conditions. output on every call so all states
-		// are recorded, not just state-changes.
-		std::ostringstream m_log;
-		m_log << "[RADIAL DISC] IsHudShown: flag=0x" << std::hex << std::uppercase
-			<< flag << " shown=" << (((flag & kHiddenBit) == 0) && ((flag & 0x1) == 0));
-		HJ::Logger::Info(m_log.str());
 		const bool shown =
 			((flag & kHiddenBit) == 0 &&
 				(flag & 0x1) == 0);
@@ -1043,7 +1040,7 @@ namespace HJ::HUD::RadialDiscDrive
 			if (!g_loggedFound.exchange(true))
 			{
 				const auto vtable =
-					*reinterpret_cast<std::uintptr_t*>(
+					SafeReadPtr(
 						object + kObjVtableOffset);
 
 				std::ostringstream stream;
@@ -1209,10 +1206,11 @@ namespace HJ::HUD::RadialDiscDrive
 			DispatchDirect(object, ratio, direct);
 			ReadSubBlock(ours.sub, afterDirect);
 
+			SubRange directRange{};
 			landed =
-				afterDirect.ok &&
-				(*reinterpret_cast<const float*>(
-					ours.sub + kSubCurrentValue) == ratio);
+				ReadSubRange(object, directRange, false) &&
+				directRange.valid &&
+				(directRange.current == ratio);
 
 			// Last resort: write the fill word the handler was
 			// supposed to produce. If the field is the render source

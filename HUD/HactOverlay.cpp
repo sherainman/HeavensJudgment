@@ -142,7 +142,15 @@ namespace
 	{
 		if (!g_moduleBase)
 			return 0;
-		return *reinterpret_cast<std::uintptr_t*>(g_moduleBase + rva);
+
+		__try
+		{
+			return *reinterpret_cast<std::uintptr_t*>(g_moduleBase + rva);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return 0;
+		}
 	}
 
 	// per-frame reads use SEH, not VirtualQuery. VirtualQuery is a kernel

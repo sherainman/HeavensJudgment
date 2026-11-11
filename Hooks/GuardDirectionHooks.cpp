@@ -49,6 +49,20 @@ namespace
 	using SlotResolveFn = std::uintptr_t(__fastcall*)(std::uintptr_t);
 	using AngleFn = float*(__fastcall*)(std::uint64_t, float*, void*, void*);
 
+	bool SafeMemEquals(std::uintptr_t address, const void* expected,
+		std::size_t size) noexcept
+	{
+		__try
+		{
+			return std::memcmp(reinterpret_cast<const void*>(address),
+				expected, size) == 0;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
 	bool SafeReadU32(std::uintptr_t address, std::uint32_t& out) noexcept
 	{
 		__try
@@ -282,8 +296,8 @@ namespace HJ::Hooks::GuardDirection
 		const std::uint8_t expected[] = {
 			0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x18, 0x55
 		};
-		if (std::memcmp(reinterpret_cast<void*>(target), expected,
-			sizeof(expected)) != 0)
+
+		if (!SafeMemEquals(target, expected, sizeof(expected)))
 		{
 			Logger::Error("Live dispatch hook: bytes dont match.");
 			return false;

@@ -135,62 +135,99 @@ namespace
 		return "other";
 	}
 
+	bool SafeMemEquals(
+		std::uintptr_t address,
+		const void* expected,
+		std::size_t size) noexcept
+	{
+		__try
+		{
+			return std::memcmp(
+				reinterpret_cast<const void*>(address),
+				expected,
+				size) == 0;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	std::uintptr_t SafeReadPtr(std::uintptr_t address)
+	{
+		__try
+		{
+			return *reinterpret_cast<const std::uintptr_t*>(address);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return 0;
+		}
+	}
+
 	std::uintptr_t ResolveObject(std::uint64_t handle)
 	{
 		if (!handle || !g_moduleBase)
 			return 0;
 
-		const auto uiManager =
-			*reinterpret_cast<std::uintptr_t*>(
-				g_moduleBase + 0x041F0D80
-			);
+		__try
+		{
+			const auto uiManager =
+				*reinterpret_cast<std::uintptr_t*>(
+					g_moduleBase + 0x041F0D80
+				);
 
-		if (!uiManager)
-			return 0;
+			if (!uiManager)
+				return 0;
 
-		const auto capacity =
-			*reinterpret_cast<std::uint32_t*>(
-				uiManager + 0x19C
-			);
+			const auto capacity =
+				*reinterpret_cast<std::uint32_t*>(
+					uiManager + 0x19C
+				);
 
-		const auto low =
-			static_cast<std::uint32_t>(handle);
+			const auto low =
+				static_cast<std::uint32_t>(handle);
 
-		if (!low)
-			return 0;
+			if (!low)
+				return 0;
 
-		const std::uint32_t index = low - 1;
+			const std::uint32_t index = low - 1;
 
-		if (index >= capacity)
-			return 0;
+			if (index >= capacity)
+				return 0;
 
-		const auto objects =
-			*reinterpret_cast<std::uintptr_t*>(
-				uiManager + 0x190
-			);
+			const auto objects =
+				*reinterpret_cast<std::uintptr_t*>(
+					uiManager + 0x190
+				);
 
-		if (!objects)
-			return 0;
+			if (!objects)
+				return 0;
 
-		const auto object =
-			*reinterpret_cast<std::uintptr_t*>(
-				objects +
-				static_cast<std::uintptr_t>(index) *
-				sizeof(std::uintptr_t)
-			);
+			const auto object =
+				*reinterpret_cast<std::uintptr_t*>(
+					objects +
+					static_cast<std::uintptr_t>(index) *
+					sizeof(std::uintptr_t)
+				);
 
-		if (!object)
-			return 0;
+			if (!object)
+				return 0;
 
-		if (
-			*reinterpret_cast<std::uint64_t*>(
-				object + 0x70
-			) != handle)
+			if (
+				*reinterpret_cast<std::uint64_t*>(
+					object + 0x70
+				) != handle)
+			{
+				return 0;
+			}
+
+			return object;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
 		{
 			return 0;
 		}
-
-		return object;
 	}
 
 	// Resolve now, while the handle is still live. Doing this at report
@@ -226,14 +263,13 @@ namespace
 		if (!object)
 			return;
 
-		const auto vtable =
-			*reinterpret_cast<std::uintptr_t*>(object);
+		const auto vtable = SafeReadPtr(object);
+		if (!vtable)
+			return;
 
 		q.object = object;
 		q.vtable = vtable;
-		q.handler =
-			*reinterpret_cast<std::uintptr_t*>(
-				vtable + 0x2C0);
+		q.handler = SafeReadPtr(vtable + 0x2C0);
 		q.handle = handle;
 		q.valid = true;
 	}
@@ -245,11 +281,12 @@ namespace
 		if (inHook)
 			return;
 
-		if (context.rcx == 0)
+		if (context.rcx == 0 || context.rsp == 0)
 			return;
 
-		const auto returnVa =
-			*reinterpret_cast<std::uintptr_t*>(context.rsp);
+		const auto returnVa = SafeReadPtr(context.rsp);
+		if (!returnVa)
+			return;
 
 		const auto returnRva =
 			returnVa - g_moduleBase;
@@ -267,7 +304,9 @@ namespace
 			static_cast<std::uint32_t>(returnRva) - 5;
 
 		const auto handle =
-			*reinterpret_cast<std::uint64_t*>(context.rcx);
+			static_cast<std::uint64_t>(SafeReadPtr(context.rcx));
+		if (!handle)
+			return;
 
 		// QTE radial sites are captured independently of the big ring
 		// buffer: they only fire during a QTE and they are the payload.
@@ -335,7 +374,7 @@ namespace
 			0x57
 		};
 
-		if (std::memcmp(bytes, kExpected, sizeof(kExpected)) != 0)
+		if (!SafeMemEquals(target, kExpected, sizeof(kExpected)))
 		{
 			HJ::Logger::Error(
 				"[BOXING UI TRACE] set_value address didnt match"
@@ -544,13 +583,12 @@ namespace
 
 			if (object)
 			{
-				const auto vtable =
-					*reinterpret_cast<std::uintptr_t*>(object);
+				const auto vtable = SafeReadPtr(object);
 
 				line
 					<< " vtable=0x" << vtable
 					<< " (image+0x"
-					<< (vtable - g_moduleBase)
+					<< (vtable >= g_moduleBase ? vtable - g_moduleBase : vtable)
 					<< ")";
 			}
 			else
