@@ -7,12 +7,10 @@ The closeness of how this will actually end up to STH's combat is unknown since 
 
 ## Current Status
 
-Development build. Not a 1.0 release.
+Development build. Not a 1.0 release. Comfortable with the state it's at right now but still needs work to be polished.
 
 The combat framework, vinyl HUD, directional guard, and camera anchor are
-implemented and playable. The presentation and test tooling are still being
-hardened: 17 of the 49 move nodes still use `SELECT ANIMATION`, and the full
-unattended harness is phased in after the offline HUD/log/probe gate.
+implemented and playable.
 
 ## Currently implemented
 
@@ -45,8 +43,7 @@ unattended harness is phased in after the offline HUD/log/probe gate.
 - Directional guard with live guard-side switching during a hold (neutral IDs
   `5559 / 13919 / 300`)
 - Camera anchor/assist for the boxing stance
-- Offline `tools/hjbench` HUD/startup-log/probe-contract gate and
-  `tools/hj_core` logic tests
+
 
 ## Planned architecture
 
@@ -64,42 +61,11 @@ unattended harness is phased in after the offline HUD/log/probe gate.
 - Lost Judgment
 - SRMM / an ASI loader
 
-## Testing
-
-The offline HUD/log gate lives in [`tools/hjbench`](tools/hjbench/README.md).
-It requires Python 3.10+ with `numpy`, `Pillow`, and `PyYAML`, and does not
-attach to the game:
-
-```powershell
-cd tools/hjbench
-python -m unittest discover -s tests -t . -v
-python hjbench.py run scenarios/smoke.yaml
-python hjbench.py probe check fixtures/probe_session.jsonl --require-capture
-powershell -ExecutionPolicy Bypass -File gate.ps1
-```
-
-The game-independent C++ logic seam lives in
-[`tools/hj_core`](tools/hj_core/README.md) and is built with CMake:
-
-```powershell
-cd tools/hj_core
-cmake -S . -B build -A x64
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
-powershell -ExecutionPolicy Bypass -File gate.ps1
-```
-
-Both gates can be run together from the `tools` directory:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File gate.ps1
-```
-
 ## Disclaimer
 
 Not associated with or endorsed by SEGA or RGG Studio. Unofficial modding and reverse engineering project.
 
-Lost Judgment and everything in it — characters, animation, audio, trademarks — belongs to SEGA / RGG Studio. None of it is claimed here, and none of it is redistributed. The MIT license covers this repository's own source code and nothing else.
+Lost Judgment and everything in it - characters, animation, audio, trademarks - belongs to SEGA / RGG Studio. None of it is claimed here, and none of it is redistributed. The MIT license covers this repository's own source code and nothing else.
 
 ## License
 
