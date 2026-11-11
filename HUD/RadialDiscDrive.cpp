@@ -891,7 +891,7 @@ namespace HJ::HUD::RadialDiscDrive
 		// cached root is checked every frame so pause/menu transitions
 		// hide the disc immediately; full pool scan is throttled when uncached.
 		static DWORD lastTick = 0;
-		static bool lastShown = true;
+		static bool lastShown = false;
 		static std::uintptr_t cached = 0;
 		static std::uint64_t cachedHandle = 0;
 		if (!g_moduleBase)
@@ -899,18 +899,16 @@ namespace HJ::HUD::RadialDiscDrive
 				reinterpret_cast<std::uintptr_t>(
 					GetModuleHandleW(nullptr));
 		if (!g_moduleBase)
-			return lastShown;
+			return false;
 		const DWORD now = GetTickCount();
 		const bool allowScan = (now - lastTick >= 500);
 		if (allowScan && !cached)
 			lastTick = now;
 		const int f = ProbeRootFlag(cached, cachedHandle, allowScan);
 		if (f < 0)
-			return lastShown;
+			return false;
 		const std::uint32_t flag = static_cast<std::uint32_t>(f);
-		const bool shown =
-			((flag & kHiddenBit) == 0 &&
-				(flag & 0x1) == 0);
+		const bool shown = (flag & kHiddenBit) == 0;
 		if (shown != lastShown)
 		{
 			std::ostringstream m;

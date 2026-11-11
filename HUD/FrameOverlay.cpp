@@ -1189,7 +1189,6 @@ __declspec(noinline) void PresentHookBodyInner(IDXGISwapChain* swap)
             !engineKnown || engineFighting;
         Stage(14);
         if (g_liveSettings.enabled &&
-            (SafeBridgeReady() || g_seenFighting) &&
             fightingGate &&
             SafeSceneAlive() &&
             SafeHudShown())
