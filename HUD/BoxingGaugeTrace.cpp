@@ -33,7 +33,6 @@ namespace
 	constexpr std::uint32_t kHealthCallerA = 0x0275D3B6;
 	constexpr std::uint32_t kHealthCallerB = 0x0275D3CE;
 
-
 	// QTE radial writers (0x1428A2080): layer lookup by ordinal in r8d,
 	// then set_value with (pos-start)/span clamped >= 0.
 	struct QteSite
@@ -175,7 +174,7 @@ namespace
 			const auto uiManager =
 				*reinterpret_cast<std::uintptr_t*>(
 					g_moduleBase + 0x041F0D80
-				);
+					);
 
 			if (!uiManager)
 				return 0;
@@ -183,7 +182,7 @@ namespace
 			const auto capacity =
 				*reinterpret_cast<std::uint32_t*>(
 					uiManager + 0x19C
-				);
+					);
 
 			const auto low =
 				static_cast<std::uint32_t>(handle);
@@ -199,7 +198,7 @@ namespace
 			const auto objects =
 				*reinterpret_cast<std::uintptr_t*>(
 					uiManager + 0x190
-				);
+					);
 
 			if (!objects)
 				return 0;
@@ -209,7 +208,7 @@ namespace
 					objects +
 					static_cast<std::uintptr_t>(index) *
 					sizeof(std::uintptr_t)
-				);
+					);
 
 			if (!object)
 				return 0;
@@ -217,7 +216,7 @@ namespace
 			if (
 				*reinterpret_cast<std::uint64_t*>(
 					object + 0x70
-				) != handle)
+					) != handle)
 			{
 				return 0;
 			}
@@ -761,7 +760,7 @@ namespace HJ::HUD::BoxingGaugeTrace
 		g_moduleBase =
 			reinterpret_cast<std::uintptr_t>(
 				GetModuleHandleW(nullptr)
-			);
+				);
 
 		if (!g_moduleBase)
 		{

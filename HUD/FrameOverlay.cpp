@@ -456,7 +456,7 @@ namespace
 		auto rim = [&](double a, float r, float& x, float& y) {
 			x = cx + r * static_cast<float>(std::cos(a));
 			y = cy + r * static_cast<float>(std::sin(a));
-		};
+			};
 		for (int i = 0; i < segs; i++)
 		{
 			const double aA = a0 + sweep * i / segs;
@@ -493,36 +493,36 @@ namespace
 		float rMid, float halfW, double a0, double sweep,
 		float cr, float cg, float cb, float ca)
 	{
-			if (rMid <= 0.0f || halfW <= 0.0f || ca <= 0.0f || sweep <= 0.0)
-				return 0;
-			int segs = static_cast<int>(64.0 * sweep / (2.0 * kPi));
-			if (segs < 1) segs = 1;
-			if (segs > 64) segs = 64;
-			const float rO = rMid + halfW;
-			const float rI = (rMid > halfW) ? rMid - halfW : 0.0f;
-			int n = 0;
-			for (int i = 0; i < segs; i++)
-			{
-				const double aA = a0 + sweep * i / segs;
-				const double aB = a0 + sweep * (i + 1) / segs;
-				const float xo0 = cx + rO * static_cast<float>(std::cos(aA));
-				const float yo0 = cy + rO * static_cast<float>(std::sin(aA));
-				const float xo1 = cx + rO * static_cast<float>(std::cos(aB));
-				const float yo1 = cy + rO * static_cast<float>(std::sin(aB));
-				const float xi0 = cx + rI * static_cast<float>(std::cos(aA));
-				const float yi0 = cy + rI * static_cast<float>(std::sin(aA));
-				const float xi1 = cx + rI * static_cast<float>(std::cos(aB));
-				const float yi1 = cy + rI * static_cast<float>(std::sin(aB));
-				if (n + 6 > capacity) break;
-				out[n++] = { xo0, yo0, 0.5f, cr, cg, cb, ca };
-				out[n++] = { xo1, yo1, 0.5f, cr, cg, cb, ca };
-				out[n++] = { xi0, yi0, 0.5f, cr, cg, cb, ca };
-				out[n++] = { xo1, yo1, 0.5f, cr, cg, cb, ca };
-				out[n++] = { xi1, yi1, 0.5f, cr, cg, cb, ca };
-				out[n++] = { xi0, yi0, 0.5f, cr, cg, cb, ca };
-			}
-			return n;
+		if (rMid <= 0.0f || halfW <= 0.0f || ca <= 0.0f || sweep <= 0.0)
+			return 0;
+		int segs = static_cast<int>(64.0 * sweep / (2.0 * kPi));
+		if (segs < 1) segs = 1;
+		if (segs > 64) segs = 64;
+		const float rO = rMid + halfW;
+		const float rI = (rMid > halfW) ? rMid - halfW : 0.0f;
+		int n = 0;
+		for (int i = 0; i < segs; i++)
+		{
+			const double aA = a0 + sweep * i / segs;
+			const double aB = a0 + sweep * (i + 1) / segs;
+			const float xo0 = cx + rO * static_cast<float>(std::cos(aA));
+			const float yo0 = cy + rO * static_cast<float>(std::sin(aA));
+			const float xo1 = cx + rO * static_cast<float>(std::cos(aB));
+			const float yo1 = cy + rO * static_cast<float>(std::sin(aB));
+			const float xi0 = cx + rI * static_cast<float>(std::cos(aA));
+			const float yi0 = cy + rI * static_cast<float>(std::sin(aA));
+			const float xi1 = cx + rI * static_cast<float>(std::cos(aB));
+			const float yi1 = cy + rI * static_cast<float>(std::sin(aB));
+			if (n + 6 > capacity) break;
+			out[n++] = { xo0, yo0, 0.5f, cr, cg, cb, ca };
+			out[n++] = { xo1, yo1, 0.5f, cr, cg, cb, ca };
+			out[n++] = { xi0, yi0, 0.5f, cr, cg, cb, ca };
+			out[n++] = { xo1, yo1, 0.5f, cr, cg, cb, ca };
+			out[n++] = { xi1, yi1, 0.5f, cr, cg, cb, ca };
+			out[n++] = { xi0, yi0, 0.5f, cr, cg, cb, ca };
 		}
+		return n;
+	}
 
 	const char* kHlsl =
 		"struct VIn { float3 p : POSITION; float4 c : COLOR; };"
@@ -741,19 +741,19 @@ namespace
 		return false;
 	}
 
-__declspec(noinline) bool EnsureBackbufferGetDesc(IDXGISwapChain* swap,
-    DXGI_SWAP_CHAIN_DESC& desc)
-{
-    __try
-    {
-        swap->GetDesc(&desc);
-        return true;
-    }
-    __except (ReportHookFault("EnsureBackbuffer", GetExceptionCode()))
-    {
-    }
-    return false;
-}
+	__declspec(noinline) bool EnsureBackbufferGetDesc(IDXGISwapChain* swap,
+		DXGI_SWAP_CHAIN_DESC& desc)
+	{
+		__try
+		{
+			swap->GetDesc(&desc);
+			return true;
+		}
+		__except (ReportHookFault("EnsureBackbuffer", GetExceptionCode()))
+		{
+		}
+		return false;
+	}
 
 	bool EnsureBackbuffer(UINT index)
 	{
@@ -961,7 +961,7 @@ __declspec(noinline) bool EnsureBackbufferGetDesc(IDXGISwapChain* swap,
 			sx = (float)cx + (sx - (float)cx) * g_aspectComp;
 			dx = sx * fx - 1.0f;
 			dy = 1.0f - sy * fy;
-		};
+			};
 		static Vertex tmp[kSlotVerts];
 		int m = 0;
 		const double a0 = -kPi / 2.0;
@@ -993,7 +993,7 @@ __declspec(noinline) bool EnsureBackbufferGetDesc(IDXGISwapChain* swap,
 				m += EmitRingSeg(tmp + m, kSlotVerts - m, (float)cx, (float)cy,
 					rMid, halfW, 0.0, 2.0 * kPi, pr, pg, pb, pa);
 			}
-		};
+			};
 		if (dmgA > 0.003f)
 		{
 			float pr, pg, pb, pa;
@@ -1132,229 +1132,229 @@ __declspec(noinline) bool EnsureBackbufferGetDesc(IDXGISwapChain* swap,
 		SafeDumpSceneObjects();
 	}
 
-__declspec(noinline) void PresentHookBodyInner(IDXGISwapChain* swap)
-{
-        AcquireHeld();
-        if (g_swap != swap)
-        {
-            Stage(11);
-            if (g_device) { /* keep: same device usually */ }
-            g_swap = swap;
-            // new swapchain, old buffers are garbage. drop em or the
-            // disc draws into a dead surface.
-            DropBackbuffers();
-            if (!g_settingsLoaded)
-            {
-                WriteDefaults();
-                g_liveSettings = LoadSettings();
-                g_settingsLoaded = true;
-                g_settingsRev++;
-            }
-        }
-        Stage(12);
-        const DWORD now = GetTickCount();
-        if (now - g_lastF11Tick > 500)
-        {
-            g_lastF11Tick = now;
-            const bool f11 = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
-            if (f11 && !g_lastF11)
-            {
-                g_liveSettings = LoadSettings();
-                g_settingsRev++;
-                LogInfo("settings reloaded (F11).");
-            }
-            g_lastF11 = f11;
-            // F12: hud object snapshot for the ui-gate hunt. take one
-            // per ui state (hud up, phone, pause, title) and diff.
-            const bool f12 = (GetAsyncKeyState(VK_F12) & 0x8000) != 0;
-            if (f12 && !g_lastF12)
-            {
-                LogF12Snapshot();
-            }
-            g_lastF12 = f12;
-        }
-        // latch the real engine flag, not the gated one. hud shows on
-        // fight start even before the first hp update, so latching
-        // inside the gate below would deadlock it.
-        // every read below is SEH-guarded + cached: pause/title teardown
-        // must skip frames, never kill Present.
-        Stage(13);
-        bool engineFighting = false;
-        const bool engineKnown = SafeFighting(engineFighting);
-        if (engineKnown && engineFighting)
-            g_seenFighting = true;
-        else if (engineKnown && !engineFighting)
-            g_seenFighting = false;
-        const bool fightingGate = !g_liveSettings.fightingOnly ||
-            !engineKnown || engineFighting;
-        Stage(14);
-        if (g_liveSettings.enabled &&
-            fightingGate &&
-            SafeSceneAlive() &&
-            SafeHudShown())
-        {
-            const float trueRatio = std::clamp(
-                SafeHealthRatio(),
-                0.0f, 1.0f);
-            // damage/heal triggers for the ghost + wash anims. white
-            // snaps, red trails from the pre-hit value.
-            const ULONGLONG nowMs = GetTickCount64();
-            const float eps = 0.0001f;
-            if (trueRatio < g_trackRatio - eps)
-            {
-                g_ghostFrom = g_trackRatio;
-                g_dmgT0 = nowMs;
-            }
-            else if (trueRatio > g_trackRatio + eps)
-            {
-                g_healT0 = nowMs;
-            }
-            g_trackRatio = trueRatio;
-            g_pendingRatio = trueRatio;
-            g_pendingSettings = g_liveSettings;
-            g_pendingValid = true;
-            g_presentSerial++;
-        }
-        else
-        {
-            g_pendingValid = false;
-        }
+	__declspec(noinline) void PresentHookBodyInner(IDXGISwapChain* swap)
+	{
+		AcquireHeld();
+		if (g_swap != swap)
+		{
+			Stage(11);
+			if (g_device) { /* keep: same device usually */ }
+			g_swap = swap;
+			// new swapchain, old buffers are garbage. drop em or the
+			// disc draws into a dead surface.
+			DropBackbuffers();
+			if (!g_settingsLoaded)
+			{
+				WriteDefaults();
+				g_liveSettings = LoadSettings();
+				g_settingsLoaded = true;
+				g_settingsRev++;
+			}
+		}
+		Stage(12);
+		const DWORD now = GetTickCount();
+		if (now - g_lastF11Tick > 500)
+		{
+			g_lastF11Tick = now;
+			const bool f11 = (GetAsyncKeyState(VK_F11) & 0x8000) != 0;
+			if (f11 && !g_lastF11)
+			{
+				g_liveSettings = LoadSettings();
+				g_settingsRev++;
+				LogInfo("settings reloaded (F11).");
+			}
+			g_lastF11 = f11;
+			// F12: hud object snapshot for the ui-gate hunt. take one
+			// per ui state (hud up, phone, pause, title) and diff.
+			const bool f12 = (GetAsyncKeyState(VK_F12) & 0x8000) != 0;
+			if (f12 && !g_lastF12)
+			{
+				LogF12Snapshot();
+			}
+			g_lastF12 = f12;
+		}
+		// latch the real engine flag, not the gated one. hud shows on
+		// fight start even before the first hp update, so latching
+		// inside the gate below would deadlock it.
+		// every read below is SEH-guarded + cached: pause/title teardown
+		// must skip frames, never kill Present.
+		Stage(13);
+		bool engineFighting = false;
+		const bool engineKnown = SafeFighting(engineFighting);
+		if (engineKnown && engineFighting)
+			g_seenFighting = true;
+		else if (engineKnown && !engineFighting)
+			g_seenFighting = false;
+		const bool fightingGate = !g_liveSettings.fightingOnly ||
+			!engineKnown || engineFighting;
+		Stage(14);
+		if (g_liveSettings.enabled &&
+			fightingGate &&
+			SafeSceneAlive() &&
+			SafeHudShown())
+		{
+			const float trueRatio = std::clamp(
+				SafeHealthRatio(),
+				0.0f, 1.0f);
+			// damage/heal triggers for the ghost + wash anims. white
+			// snaps, red trails from the pre-hit value.
+			const ULONGLONG nowMs = GetTickCount64();
+			const float eps = 0.0001f;
+			if (trueRatio < g_trackRatio - eps)
+			{
+				g_ghostFrom = g_trackRatio;
+				g_dmgT0 = nowMs;
+			}
+			else if (trueRatio > g_trackRatio + eps)
+			{
+				g_healT0 = nowMs;
+			}
+			g_trackRatio = trueRatio;
+			g_pendingRatio = trueRatio;
+			g_pendingSettings = g_liveSettings;
+			g_pendingValid = true;
+			g_presentSerial++;
+		}
+		else
+		{
+			g_pendingValid = false;
+		}
 
-        if (g_pendingValid && g_swap && g_queue && EnsureDevice(g_swap))
-        {
-            Stage(22);
-            UINT idx = 0;
-            IDXGISwapChain3* swap3 = nullptr;
-            if (SUCCEEDED(g_swap->QueryInterface(
-                IID_PPV_ARGS(&swap3))) && swap3)
-            {
-                idx = swap3->GetCurrentBackBufferIndex();
-                swap3->Release();
-            }
-            ID3D12GraphicsCommandList* hitList = nullptr;
-            int hitSlot = -1;
-            Stage(23);
-            if (EnsureBackbuffer(idx))
-            {
-                Stage(24);
-                int bucket = (int)(g_pendingRatio * 2048.0f);
-                const double frac = g_pendingSettings.lowHPFrac;
-                const double hz = g_pendingSettings.pulseHz;
-                if (frac > 0.0 && g_pendingRatio < (float)frac)
-                    g_lowLatched = true;
-                else if (frac <= 0.0 || g_pendingRatio > (float)(frac + 0.02))
-                    g_lowLatched = false;
-                float pulsePhase = -1.0f;
-                int phaseQ = 0;
-                if (g_lowLatched && hz > 0.0)
-                {
-                    const double t = GetTickCount64() / 1000.0;
-                    pulsePhase = 0.5f + 0.5f * static_cast<float>(
-                        std::sin(2.0 * kPi * hz * t));
-                    phaseQ = static_cast<int>(pulsePhase * 15.999f);
-                }
-                const ULONGLONG nowMs = GetTickCount64();
-                const float trueRatio = g_pendingRatio;
-                float ghost = trueRatio;
-                float dmgA = 0.0f, healA = 0.0f;
-                const double gs = g_pendingSettings.dmgGhostSec;
-                if (gs > 0.0 && nowMs >= g_dmgT0)
-                {
-                    const double el = (nowMs - g_dmgT0) / 1000.0;
-                    if (el < gs && g_ghostFrom > trueRatio)
-                        ghost = trueRatio + (g_ghostFrom - trueRatio) *
-                            static_cast<float>(1.0 - el / gs);
-                }
-                const double ps = g_pendingSettings.dmgPulseSec;
-                if (ps > 0.0 && nowMs >= g_dmgT0)
-                {
-                    const double el = (nowMs - g_dmgT0) / 1000.0;
-                    if (el < ps) dmgA = static_cast<float>(1.0 - el / ps);
-                }
-                const double hs = g_pendingSettings.healSec;
-                if (hs > 0.0 && nowMs >= g_healT0)
-                {
-                    const double el = (nowMs - g_healT0) / 1000.0;
-                    if (el < hs) healA = static_cast<float>(1.0 - el / hs);
-                }
-                if (ghost > trueRatio + 0.0005f ||
-                    dmgA > 0.003f || healA > 0.003f)
-                    phaseQ = static_cast<int>((g_presentSerial & 63) + 128);
-                int slot = -1;
-                for (int i = 0; i < kRecSlots; i++)
-                {
-                    if (g_keys[i].valid && g_keys[i].buf == idx &&
-                        g_keys[i].w == g_bufW && g_keys[i].h == g_bufH &&
-                        g_keys[i].aspectQ == g_aspectQ &&
-                        g_keys[i].bucket == bucket &&
-                        g_keys[i].phaseQ == phaseQ &&
-                        g_keys[i].settingsRev == g_settingsRev)
-                    {
-                        slot = i;
-                        break;
-                    }
-                }
-                if (slot < 0)
-                {
-                    int oldest = 0;
-                    for (int i = 0; i < kRecSlots; i++)
-                    {
-                        if (!g_keys[i].valid)
-                        {
-                            oldest = i;
-                            break;
-                        }
-                        if (g_slotSerial[i] < g_slotSerial[oldest])
-                            oldest = i;
-                    }
-                    const bool fenceDone = !g_fence ||
-                        g_slotFence[oldest] == 0 ||
-                        g_fence->GetCompletedValue() >= g_slotFence[oldest];
-                    if ((!g_keys[oldest].valid ||
-                        g_slotSerial[oldest] + kSlotMinAge <= g_presentSerial) &&
-                        fenceDone)
-                    {
-                        slot = oldest;
-                        if (RecordOverlay(idx, slot, g_pendingRatio,
-                            pulsePhase, ghost, dmgA, healA,
-                            g_pendingSettings, g_bufW, g_bufH))
-                        {
-                            g_keys[slot] = { idx, g_bufW, g_bufH, g_aspectQ,
-                                bucket, phaseQ, g_settingsRev, true };
-                        }
-                        else
-                        {
-                            slot = -1;
-                        }
-                    }
-                }
-                if (slot >= 0 && g_lists[slot])
-                {
-                    g_slotSerial[slot] = g_presentSerial;
-                    hitList = g_lists[slot];
-                    hitSlot = slot;
-                }
-            }
-            if (hitList)
-            {
-                Stage(25);
-                ID3D12CommandList* cmdList = hitList;
-                g_executeHook.call<void>(g_queue, 1, &cmdList);
-                if (g_fence && hitSlot >= 0)
-                {
-                    const UINT64 fv = ++g_fenceValue;
-                    if (SUCCEEDED(g_queue->Signal(g_fence, fv)))
-                        g_slotFence[hitSlot] = fv;
-                }
-                if (!g_loggedInject)
-                {
-                    g_loggedInject = true;
-                    LogCStr("first injection ok.");
-                }
-            }
-        }
-        ReleaseHeld();
-    }
+		if (g_pendingValid && g_swap && g_queue && EnsureDevice(g_swap))
+		{
+			Stage(22);
+			UINT idx = 0;
+			IDXGISwapChain3* swap3 = nullptr;
+			if (SUCCEEDED(g_swap->QueryInterface(
+				IID_PPV_ARGS(&swap3))) && swap3)
+			{
+				idx = swap3->GetCurrentBackBufferIndex();
+				swap3->Release();
+			}
+			ID3D12GraphicsCommandList* hitList = nullptr;
+			int hitSlot = -1;
+			Stage(23);
+			if (EnsureBackbuffer(idx))
+			{
+				Stage(24);
+				int bucket = (int)(g_pendingRatio * 2048.0f);
+				const double frac = g_pendingSettings.lowHPFrac;
+				const double hz = g_pendingSettings.pulseHz;
+				if (frac > 0.0 && g_pendingRatio < (float)frac)
+					g_lowLatched = true;
+				else if (frac <= 0.0 || g_pendingRatio > (float)(frac + 0.02))
+					g_lowLatched = false;
+				float pulsePhase = -1.0f;
+				int phaseQ = 0;
+				if (g_lowLatched && hz > 0.0)
+				{
+					const double t = GetTickCount64() / 1000.0;
+					pulsePhase = 0.5f + 0.5f * static_cast<float>(
+						std::sin(2.0 * kPi * hz * t));
+					phaseQ = static_cast<int>(pulsePhase * 15.999f);
+				}
+				const ULONGLONG nowMs = GetTickCount64();
+				const float trueRatio = g_pendingRatio;
+				float ghost = trueRatio;
+				float dmgA = 0.0f, healA = 0.0f;
+				const double gs = g_pendingSettings.dmgGhostSec;
+				if (gs > 0.0 && nowMs >= g_dmgT0)
+				{
+					const double el = (nowMs - g_dmgT0) / 1000.0;
+					if (el < gs && g_ghostFrom > trueRatio)
+						ghost = trueRatio + (g_ghostFrom - trueRatio) *
+						static_cast<float>(1.0 - el / gs);
+				}
+				const double ps = g_pendingSettings.dmgPulseSec;
+				if (ps > 0.0 && nowMs >= g_dmgT0)
+				{
+					const double el = (nowMs - g_dmgT0) / 1000.0;
+					if (el < ps) dmgA = static_cast<float>(1.0 - el / ps);
+				}
+				const double hs = g_pendingSettings.healSec;
+				if (hs > 0.0 && nowMs >= g_healT0)
+				{
+					const double el = (nowMs - g_healT0) / 1000.0;
+					if (el < hs) healA = static_cast<float>(1.0 - el / hs);
+				}
+				if (ghost > trueRatio + 0.0005f ||
+					dmgA > 0.003f || healA > 0.003f)
+					phaseQ = static_cast<int>((g_presentSerial & 63) + 128);
+				int slot = -1;
+				for (int i = 0; i < kRecSlots; i++)
+				{
+					if (g_keys[i].valid && g_keys[i].buf == idx &&
+						g_keys[i].w == g_bufW && g_keys[i].h == g_bufH &&
+						g_keys[i].aspectQ == g_aspectQ &&
+						g_keys[i].bucket == bucket &&
+						g_keys[i].phaseQ == phaseQ &&
+						g_keys[i].settingsRev == g_settingsRev)
+					{
+						slot = i;
+						break;
+					}
+				}
+				if (slot < 0)
+				{
+					int oldest = 0;
+					for (int i = 0; i < kRecSlots; i++)
+					{
+						if (!g_keys[i].valid)
+						{
+							oldest = i;
+							break;
+						}
+						if (g_slotSerial[i] < g_slotSerial[oldest])
+							oldest = i;
+					}
+					const bool fenceDone = !g_fence ||
+						g_slotFence[oldest] == 0 ||
+						g_fence->GetCompletedValue() >= g_slotFence[oldest];
+					if ((!g_keys[oldest].valid ||
+						g_slotSerial[oldest] + kSlotMinAge <= g_presentSerial) &&
+						fenceDone)
+					{
+						slot = oldest;
+						if (RecordOverlay(idx, slot, g_pendingRatio,
+							pulsePhase, ghost, dmgA, healA,
+							g_pendingSettings, g_bufW, g_bufH))
+						{
+							g_keys[slot] = { idx, g_bufW, g_bufH, g_aspectQ,
+								bucket, phaseQ, g_settingsRev, true };
+						}
+						else
+						{
+							slot = -1;
+						}
+					}
+				}
+				if (slot >= 0 && g_lists[slot])
+				{
+					g_slotSerial[slot] = g_presentSerial;
+					hitList = g_lists[slot];
+					hitSlot = slot;
+				}
+			}
+			if (hitList)
+			{
+				Stage(25);
+				ID3D12CommandList* cmdList = hitList;
+				g_executeHook.call<void>(g_queue, 1, &cmdList);
+				if (g_fence && hitSlot >= 0)
+				{
+					const UINT64 fv = ++g_fenceValue;
+					if (SUCCEEDED(g_queue->Signal(g_fence, fv)))
+						g_slotFence[hitSlot] = fv;
+				}
+				if (!g_loggedInject)
+				{
+					g_loggedInject = true;
+					LogCStr("first injection ok.");
+				}
+			}
+		}
+		ReleaseHeld();
+	}
 
 	void PresentHookBody(IDXGISwapChain* swap)
 	{
@@ -1372,7 +1372,7 @@ __declspec(noinline) void PresentHookBodyInner(IDXGISwapChain* swap)
 	HRESULT WINAPI PresentHook(IDXGISwapChain* swap, UINT sync, UINT flags)
 	{
 		if (!g_disabled.load())
-		__try
+			__try
 		{
 			PresentHookBody(swap);
 		}
@@ -1386,7 +1386,7 @@ __declspec(noinline) void PresentHookBodyInner(IDXGISwapChain* swap)
 		ID3D12CommandList* const* lists)
 	{
 		if (!g_disabled.load() && queue && count > 0)
-		__try
+			__try
 		{
 			Stage(20);
 			D3D12_COMMAND_QUEUE_DESC qd = queue->GetDesc();

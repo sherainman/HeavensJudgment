@@ -21,26 +21,26 @@ namespace
 	std::uintptr_t g_moduleBase = 0;
 
 	// these are all pointer slots, the blocks live on the heap.
-	constexpr std::uintptr_t kFlagsSlotRva  = 0x0430BE48;
-	constexpr std::uintptr_t kLatchSlotRva  = 0x0430BEC0;
-	constexpr std::uintptr_t kBattleCtxRva  = 0x041F0BD0;
+	constexpr std::uintptr_t kFlagsSlotRva = 0x0430BE48;
+	constexpr std::uintptr_t kLatchSlotRva = 0x0430BEC0;
+	constexpr std::uintptr_t kBattleCtxRva = 0x041F0BD0;
 
-	constexpr std::uintptr_t kFlagMaster   = 0x438;
+	constexpr std::uintptr_t kFlagMaster = 0x438;
 	constexpr std::uintptr_t kFlagSuppress = 0x3D8;
 
 	constexpr std::uintptr_t kLatchArmed = 0x2C;
-	constexpr std::uintptr_t kLatchId    = 0x1110;
+	constexpr std::uintptr_t kLatchId = 0x1110;
 
 	// FighterSlot_ByIndex(1, ctx) is just ctx + 0x390
 	constexpr std::uintptr_t kPlayerSlotOff = 0x390;
-	constexpr std::uintptr_t kHeatCurrent   = 0x28;
-	constexpr std::uintptr_t kHeatMax       = 0x2C;
-	constexpr std::uintptr_t kHeatPrev      = 0x30;
+	constexpr std::uintptr_t kHeatCurrent = 0x28;
+	constexpr std::uintptr_t kHeatMax = 0x2C;
+	constexpr std::uintptr_t kHeatPrev = 0x30;
 
 	bool g_initialized = false;
 	std::mutex g_logMutex;
 	bool g_warnedNoBase = false;
-	bool g_warnedNoCtx  = false;
+	bool g_warnedNoCtx = false;
 	bool g_warnedNoLatch = false;
 
 	constexpr std::uintptr_t kGateRva = 0x02EAAEB0;
@@ -306,7 +306,7 @@ namespace
 	}
 
 	void LogFirstCalls(std::uint64_t raw, std::uint32_t id, std::uint32_t prop,
-			std::uintptr_t callerRva)
+		std::uintptr_t callerRva)
 	{
 		if (g_dumpedFirst.load(std::memory_order_relaxed))
 			return;
@@ -375,7 +375,7 @@ namespace
 					id,
 					prop,
 					reinterpret_cast<std::uintptr_t>(_ReturnAddress()) -
-						(g_moduleBase ? g_moduleBase : 0)
+					(g_moduleBase ? g_moduleBase : 0)
 				);
 			}
 

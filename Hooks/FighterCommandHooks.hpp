@@ -39,4 +39,8 @@ namespace HJ::Hooks::FighterCommand
 		std::uintptr_t container,
 		std::uint32_t packedCommand
 	);
+
+	void NotifyPlayerBlockedHit() noexcept;
+
+	void TickHitstopFrameScale() noexcept;
 }

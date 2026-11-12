@@ -21,7 +21,6 @@ namespace
 
 	std::atomic<bool> g_loggedFound{ false };
 
-
 	// per-frame caller, so cap the spam. failures always log.
 	std::atomic<std::uint32_t> g_driveCount{ 0 };
 
@@ -156,7 +155,7 @@ namespace
 			g_cachedObject = 0;
 			std::ostringstream s;
 			s << "[RADIAL TEST] target=" << kTestCandidates[t].label
-			  << " (F9)";
+				<< " (F9)";
 			HJ::Logger::Info(s.str());
 		}
 		if (f10 && !prevF10)
@@ -176,7 +175,6 @@ namespace
 		const std::uint64_t* handlePtr,
 		float value);
 
-	
 	static std::uintptr_t SafeReadPtr(const std::uintptr_t addr)
 	{
 		__try
@@ -213,56 +211,56 @@ namespace
 		}
 	}
 
-std::uintptr_t FindRadialObject(std::uint64_t* outHandle)
-{
-	*outHandle = 0;
-
-	__try
+	std::uintptr_t FindRadialObject(std::uint64_t* outHandle)
 	{
-		const auto uiManager = SafeReadPtr(g_moduleBase + kUiManagerRva);
-	if (!uiManager)
-		return 0;
+		*outHandle = 0;
 
-	const auto objects = SafeReadPtr(uiManager + kMgrObjects);
-	const auto capacity = SafeRead32(uiManager + kMgrCapacity);
+		__try
+		{
+			const auto uiManager = SafeReadPtr(g_moduleBase + kUiManagerRva);
+			if (!uiManager)
+				return 0;
 
-	if (!objects || capacity == 0 || capacity > 0x1000000)
-		return 0;
+			const auto objects = SafeReadPtr(uiManager + kMgrObjects);
+			const auto capacity = SafeRead32(uiManager + kMgrCapacity);
 
-	for (std::uint32_t index = 0, seen = 0; index < capacity; ++index)
-	{
-		const auto object = SafeReadPtr(objects + static_cast<std::uintptr_t>(index) * 8);
-		if (!object)
-			continue;
+			if (!objects || capacity == 0 || capacity > 0x1000000)
+				return 0;
 
-		if (SafeRead64(object + kObjTagOffset) != ActiveTag())
-			continue;
+			for (std::uint32_t index = 0, seen = 0; index < capacity; ++index)
+			{
+				const auto object = SafeReadPtr(objects + static_cast<std::uintptr_t>(index) * 8);
+				if (!object)
+					continue;
 
-	// same tag can match several objects, so check vtable + ordinal too.
-		if (SafeReadPtr(object + kObjVtableOffset) != ActiveVtable())
-			continue;
+				if (SafeRead64(object + kObjTagOffset) != ActiveTag())
+					continue;
 
-		const auto handle = SafeRead64(object + kObjHandleOffset);
+				// same tag can match several objects, so check vtable + ordinal too.
+				if (SafeReadPtr(object + kObjVtableOffset) != ActiveVtable())
+					continue;
 
-		// engine self-check: low word of handle must be index+1.
-		if (!handle ||
-			static_cast<std::uint32_t>(handle) != index + 1)
-			continue;
+				const auto handle = SafeRead64(object + kObjHandleOffset);
 
-		if (seen++ < static_cast<std::uint32_t>(ActiveOrdinal()))
-			continue;
+				// engine self-check: low word of handle must be index+1.
+				if (!handle ||
+					static_cast<std::uint32_t>(handle) != index + 1)
+					continue;
 
-		*outHandle = handle;
-		return object;
+				if (seen++ < static_cast<std::uint32_t>(ActiveOrdinal()))
+					continue;
+
+				*outHandle = handle;
+				return object;
+			}
+
+			return 0;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return 0;
+		}
 	}
-
-		return 0;
-	}
-	__except (EXCEPTION_EXECUTE_HANDLER)
-	{
-		return 0;
-	}
-}
 
 	// pod only or the compiler complains (C2712). -1 on fault.
 	int ProbeRootFlag(
@@ -275,7 +273,7 @@ std::uintptr_t FindRadialObject(std::uint64_t* outHandle)
 			__try
 			{
 				if (*reinterpret_cast<std::uint64_t*>(
-						cached + kObjTagOffset) == kRootTag &&
+					cached + kObjTagOffset) == kRootTag &&
 					*reinterpret_cast<std::uint64_t*>(
 						cached + kObjHandleOffset) == cachedHandle)
 				{
@@ -756,7 +754,7 @@ std::uintptr_t FindRadialObject(std::uint64_t* outHandle)
 		}
 		__except (
 			(out.faultCode = static_cast<int>(GetExceptionCode()),
-			 EXCEPTION_EXECUTE_HANDLER))
+				EXCEPTION_EXECUTE_HANDLER))
 		{
 		}
 	}
@@ -864,8 +862,8 @@ namespace HJ::HUD::RadialDiscDrive
 		static std::uint64_t cachedHandle = 0;
 		if (!g_moduleBase)
 			g_moduleBase =
-				reinterpret_cast<std::uintptr_t>(
-					GetModuleHandleW(nullptr));
+			reinterpret_cast<std::uintptr_t>(
+				GetModuleHandleW(nullptr));
 		if (!g_moduleBase)
 			return false;
 		const DWORD now = GetTickCount();
@@ -896,8 +894,8 @@ namespace HJ::HUD::RadialDiscDrive
 		static std::uint64_t cachedHandle = 0;
 		if (!g_moduleBase)
 			g_moduleBase =
-				reinterpret_cast<std::uintptr_t>(
-					GetModuleHandleW(nullptr));
+			reinterpret_cast<std::uintptr_t>(
+				GetModuleHandleW(nullptr));
 		if (!g_moduleBase)
 			return false;
 		const DWORD now = GetTickCount();
@@ -1165,7 +1163,7 @@ namespace HJ::HUD::RadialDiscDrive
 		ProbeSetBail(g_moduleBase, &handle, probe);
 
 		if (!TrySetValue(
-				g_moduleBase + kSetValueRva, &handle, ratio))
+			g_moduleBase + kSetValueRva, &handle, ratio))
 		{
 			g_disabled.store(true, std::memory_order_relaxed);
 
@@ -1289,7 +1287,7 @@ namespace HJ::HUD::RadialDiscDrive
 		AppendBlock(
 			stream,
 			pokeOk ? afterPoke
-				: (!landed ? afterDirect : after));
+			: (!landed ? afterDirect : after));
 
 		// On the first line the wide bar the engine drives itself is
 		// read alongside. It shares our vtable and is known to drain, so
@@ -1302,7 +1300,7 @@ namespace HJ::HUD::RadialDiscDrive
 				ResolveHandle(
 					ReadWideBarHandle(
 						HJ::HUD::RadialHealthBridge::
-							GetHealthHudController()));
+						GetHealthHudController()));
 
 			if (barObject && ReadSubRange(barObject, bar, false))
 			{

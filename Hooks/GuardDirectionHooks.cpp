@@ -1,4 +1,5 @@
 #include "GuardDirectionHooks.hpp"
+#include "FighterCommandHooks.hpp"
 
 #include "../Core/Logger.hpp"
 
@@ -22,7 +23,6 @@ namespace
 	constexpr std::uintptr_t kAngleRva = 0x2E84090;
 	constexpr std::uintptr_t kSlotResolveRva = 0x2ED1270;
 
-	
 	constexpr float kCone = 1.047f;
 	constexpr float kSideCone = 1.92f;
 	constexpr float kFrontOverlap = 0.1f;
@@ -47,7 +47,7 @@ namespace
 	std::atomic<std::uint16_t> g_cachedButtons{ 0 };
 
 	using SlotResolveFn = std::uintptr_t(__fastcall*)(std::uintptr_t);
-	using AngleFn = float*(__fastcall*)(std::uint64_t, float*, void*, void*);
+	using AngleFn = float* (__fastcall*)(std::uint64_t, float*, void*, void*);
 
 	bool SafeMemEquals(std::uintptr_t address, const void* expected,
 		std::size_t size) noexcept
@@ -188,7 +188,6 @@ namespace
 		float angle = 0.0f;
 		if (!TryGetBlockAngle(owner, packet, angle))
 		{
-			
 			const unsigned n = g_angleFailCount.fetch_add(1) + 1;
 			if (n <= 5 || n % 200 == 0)
 			{
@@ -222,6 +221,7 @@ namespace
 				// neutral holds both sides but pops open right after
 				const int n = g_bothBlocks.fetch_add(1) + 1;
 				g_blockCount.fetch_add(1);
+				HJ::Hooks::FighterCommand::NotifyPlayerBlockedHit();
 				HJ::Logger::Info(std::format(
 					"HJ GUARD: neutral block angle={:.3f} count={}", angle, n));
 			}
@@ -243,6 +243,7 @@ namespace
 			if (frontResult != 0)
 			{
 				g_blockCount.fetch_add(1);
+				HJ::Hooks::FighterCommand::NotifyPlayerBlockedHit();
 				HJ::Logger::Info(std::format(
 					"HJ GUARD: front block on {}", wantLeft ? "left" : "right"));
 			}
@@ -265,6 +266,7 @@ namespace
 		if (result != 0)
 		{
 			g_blockCount.fetch_add(1);
+			HJ::Hooks::FighterCommand::NotifyPlayerBlockedHit();
 			HJ::Logger::Info(std::format(
 				"HJ GUARD: block side={} angle={:.3f}",
 				wantLeft ? "L" : "R", angle));

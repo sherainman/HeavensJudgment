@@ -45,7 +45,7 @@ namespace
 
 	constexpr std::size_t kObjectDumpBytes = 0x200;
 	constexpr std::size_t kCellScanBytes = 0x400;
-	constexpr std::size_t kCellDumpQwords = 0x80; 
+	constexpr std::size_t kCellDumpQwords = 0x80;
 
 	constexpr std::uint64_t kTagSceneRoot =
 		(static_cast<std::uint64_t>(1) << 32) | kSceneLifeGauge;
@@ -141,7 +141,7 @@ namespace
 	{
 		std::ostringstream os;
 		os << "0x" << std::uppercase << std::hex
-		   << std::setw(16) << std::setfill('0') << value;
+			<< std::setw(16) << std::setfill('0') << value;
 		return os.str();
 	}
 
@@ -155,9 +155,9 @@ namespace
 		MEMORY_BASIC_INFORMATION mbi = {};
 
 		if (VirtualQuery(
-				reinterpret_cast<LPCVOID>(address),
-				&mbi,
-				sizeof(mbi)) == 0)
+			reinterpret_cast<LPCVOID>(address),
+			&mbi,
+			sizeof(mbi)) == 0)
 		{
 			return 0;
 		}
@@ -167,8 +167,8 @@ namespace
 
 		if (mbi.State != MEM_COMMIT ||
 			(mbi.Protect & (PAGE_READONLY | PAGE_READWRITE |
-							PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
-							PAGE_EXECUTE_WRITECOPY | PAGE_WRITECOPY)) == 0)
+				PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+				PAGE_EXECUTE_WRITECOPY | PAGE_WRITECOPY)) == 0)
 		{
 			return 0;
 		}
@@ -237,7 +237,6 @@ namespace
 		return xHit && sizeHit;
 	}
 
-
 	struct TableObj
 	{
 		std::uint32_t index = 0;
@@ -245,13 +244,13 @@ namespace
 		std::uintptr_t object = 0;
 		std::uintptr_t vtable = 0;
 		std::uintptr_t parent = 0;
-		std::uint64_t tag = 0;       
-		std::uintptr_t cell = 0;     
+		std::uint64_t tag = 0;
+		std::uintptr_t cell = 0;
 
-		int parentIndex = -1;       
-		bool sceneMember = false;    
+		int parentIndex = -1;
+		bool sceneMember = false;
 		bool hactJudgeMember = false;  // scene 324 (player_can_hact_judge)
-		bool cellXSize = false;      
+		bool cellXSize = false;
 		int cellXHitOffset = -1;
 		float cellX = 0.0f;
 		float cellY = 0.0f;
@@ -282,7 +281,6 @@ namespace
 			if (!handle)
 				continue;
 
-			
 			if (static_cast<std::uint32_t>(handle) != index + 1)
 				continue;
 
@@ -302,7 +300,6 @@ namespace
 				(static_cast<std::uint32_t>(entry.tag) & 0xFFFF) ==
 				kSceneHActJudge;
 
-			
 			if (entry.cell >= 0x10000 &&
 				entry.cell < 0x0000800000000000ULL)
 			{
@@ -329,7 +326,6 @@ namespace
 			result.push_back(entry);
 		}
 
-		
 		for (auto& entry : result)
 		{
 			if (!entry.parent)
@@ -352,7 +348,7 @@ namespace
 	{
 		std::ostringstream os;
 		os << "0x" << std::uppercase << std::hex
-		   << std::setw(4) << std::setfill('0') << value;
+			<< std::setw(4) << std::setfill('0') << value;
 		return os.str();
 	}
 
@@ -389,12 +385,12 @@ namespace
 
 				if (std::isfinite(f) &&
 					(std::fabs(f - kQuadrantX) < 2.0f ||
-					 std::fabs(f - kQuadrantY) < 0.5f ||
-					 std::fabs(f - kQuadrantSize) < 1.0f ||
-					 std::fabs(f - kQuadrantIvoryR) < 0.01f ||
-					 std::fabs(f - kQuadrantIvoryG) < 0.01f ||
-					 std::fabs(f - kQuadrantIvoryB) < 0.01f ||
-					 std::fabs(f - kQuadrantIvoryA) < 0.01f))
+						std::fabs(f - kQuadrantY) < 0.5f ||
+						std::fabs(f - kQuadrantSize) < 1.0f ||
+						std::fabs(f - kQuadrantIvoryR) < 0.01f ||
+						std::fabs(f - kQuadrantIvoryG) < 0.01f ||
+						std::fabs(f - kQuadrantIvoryB) < 0.01f ||
+						std::fabs(f - kQuadrantIvoryA) < 0.01f))
 				{
 					out << "  <<< float " << f;
 				}
@@ -523,48 +519,48 @@ namespace
 
 		out << "  total scene-301 members: " << members << '\n';
 
-	// Scene 324 (player_can_hact_judge) tree
-	{
-		out
-			<< "\n== SCENE 324 TREE (tag low16 = 0x"
-			<< std::hex << std::uppercase << kSceneHActJudge << std::dec
-			<< ") ==\n";
-
-		members = 0;
-
-		for (const auto& e : table)
+		// Scene 324 (player_can_hact_judge) tree
 		{
-			if (!e.hactJudgeMember)
-				continue;
+			out
+				<< "\n== SCENE 324 TREE (tag low16 = 0x"
+				<< std::hex << std::uppercase << kSceneHActJudge << std::dec
+				<< ") ==\n";
 
-			members++;
+			members = 0;
 
-			out << "  " << IndexHex(e.index)
-				<< " vt=" << H8(e.vtable)
-				<< " parentIdx=";
+			for (const auto& e : table)
+			{
+				if (!e.hactJudgeMember)
+					continue;
 
-			if (e.parentIndex >= 0)
-				out << IndexHex(table[e.parentIndex].index);
-			else
-				out << "-";
+				members++;
 
-			out << " tag=" << H8(e.tag)
-				<< " cell=";
+				out << "  " << IndexHex(e.index)
+					<< " vt=" << H8(e.vtable)
+					<< " parentIdx=";
 
-			if (e.cell)
-				out << H8(e.cell);
-			else
-				out << "-";
+				if (e.parentIndex >= 0)
+					out << IndexHex(table[e.parentIndex].index);
+				else
+					out << "-";
 
-			if (e.cellXSize)
-				out << "  <<< CELL X&SIZE";
+				out << " tag=" << H8(e.tag)
+					<< " cell=";
 
-			out << '\n';
+				if (e.cell)
+					out << H8(e.cell);
+				else
+					out << "-";
+
+				if (e.cellXSize)
+					out << "  <<< CELL X&SIZE";
+
+				out << '\n';
+			}
+
+			out << "  total scene-324 members: " << members << '\n';
 		}
-
-		out << "  total scene-324 members: " << members << '\n';
 	}
-}
 
 	void EmitCellHits(
 		std::ofstream& out,
@@ -667,7 +663,6 @@ namespace
 			if (u == 73)
 				hits.push_back({ off, "SPRITE_73" });
 
-	
 			if (u == 9)
 				hits.push_back({ off, "PIECE_ID" });
 		}
@@ -675,7 +670,6 @@ namespace
 		out << "  [target " << label << "] ptr=" << H8(ptr)
 			<< " scanned=" << std::hex << safeBytes << std::dec
 			<< " hits=" << hits.size() << '\n';
-
 
 		std::sort(hits.begin(), hits.end(),
 			[](const Hit& a, const Hit& b)
@@ -693,7 +687,6 @@ namespace
 				<< (h.off % kElemSlotStride) << ")  " << h.kind << '\n';
 		}
 	}
-
 
 	void CollectHeapPointers(
 		std::uintptr_t ptr,
@@ -720,12 +713,10 @@ namespace
 
 			std::memcpy(&v, raw + off, sizeof(v));
 
-		
 			if (v >= 0x7FF4C0000000ULL && v <= 0x7FF500000000ULL)
 				out.push_back(static_cast<std::uintptr_t>(v));
 		}
 	}
-
 
 	void EmitElementTargetScan(
 		std::ofstream& out,
@@ -765,41 +756,40 @@ namespace
 
 		auto dumpBlock = [&](const char* name, std::uintptr_t cell,
 			std::size_t startOff, std::size_t endOff)
-		{
-			out << "  " << name << " ptr block [+0x"
-				<< std::hex << startOff << " .. +0x" << endOff
-				<< "]:\n" << std::dec;
-
-			if (!cell || cell < 0x10000 ||
-				cell > 0x0000800000000000ULL)
 			{
-				out << "    (no cell)\n";
-				return;
-			}
+				out << "  " << name << " ptr block [+0x"
+					<< std::hex << startOff << " .. +0x" << endOff
+					<< "]:\n" << std::dec;
 
-			for (std::size_t off = startOff;
-				off <= endOff;
-				off += sizeof(std::uint64_t))
-			{
-				const std::uint64_t v = ReadU64(cell + off);
-
-				out << "    +0x" << std::hex << std::uppercase
-					<< std::setw(3) << std::setfill('0') << off << std::dec
-					<< "  " << H8(v);
-
-				if (v >= 0x10000 && v < 0x0000800000000000ULL)
+				if (!cell || cell < 0x10000 ||
+					cell > 0x0000800000000000ULL)
 				{
-					out << "  <ptr>";
+					out << "    (no cell)\n";
+					return;
 				}
 
-				out << '\n';
-			}
-		};
+				for (std::size_t off = startOff;
+					off <= endOff;
+					off += sizeof(std::uint64_t))
+				{
+					const std::uint64_t v = ReadU64(cell + off);
+
+					out << "    +0x" << std::hex << std::uppercase
+						<< std::setw(3) << std::setfill('0') << off << std::dec
+						<< "  " << H8(v);
+
+					if (v >= 0x10000 && v < 0x0000800000000000ULL)
+					{
+						out << "  <ptr>";
+					}
+
+					out << '\n';
+				}
+			};
 
 		dumpBlock("layout", layoutCell, 0x18, 0x18);
 		dumpBlock("layout", layoutCell, 0x210, 0x240);
 		dumpBlock("root", rootCell, 0x1F0, 0x220);
-
 
 		struct Target
 		{
@@ -811,15 +801,15 @@ namespace
 
 		auto addTarget = [&](const char* label, std::uintptr_t cell,
 			std::size_t off)
-		{
-			if (!cell)
-				return;
+			{
+				if (!cell)
+					return;
 
-			const std::uint64_t v = ReadU64(cell + off);
+				const std::uint64_t v = ReadU64(cell + off);
 
-			if (v >= 0x10000 && v < 0x0000800000000000ULL)
-				targets.push_back({ label, static_cast<std::uintptr_t>(v) });
-		};
+				if (v >= 0x10000 && v < 0x0000800000000000ULL)
+					targets.push_back({ label, static_cast<std::uintptr_t>(v) });
+			};
 
 		addTarget("layout.cell+0x18", layoutCell, 0x18);
 		addTarget("layout.cell+0x218", layoutCell, 0x218);
@@ -830,7 +820,7 @@ namespace
 		addTarget("root.cell+0x210", rootCell, 0x210);
 
 		constexpr std::size_t kTargetScanBytes =
-			11 * kElemSlotStride + 0x40; 
+			11 * kElemSlotStride + 0x40;
 
 		for (const auto& t : targets)
 			ScanTargetForWedge(out, t.label, t.ptr, kTargetScanBytes);
@@ -850,7 +840,6 @@ namespace
 				safeBytes / sizeof(std::uint64_t), "    ", true);
 		}
 
-
 		out << "\n== BUILD 1d CHILD FAN-OUT SCAN ==\n";
 
 		std::vector<std::vector<std::uintptr_t>> perTarget;
@@ -861,7 +850,6 @@ namespace
 
 			CollectHeapPointers(t.ptr, kTargetScanBytes, lst);
 
-			
 			lst.erase(
 				std::remove(lst.begin(), lst.end(), t.ptr),
 				lst.end());
@@ -1056,23 +1044,21 @@ namespace
 
 		EmitSceneTree(out, table);
 
-
 		std::vector<bool> wantedFlag(table.size(), false);
 		std::vector<std::uint32_t> wanted;
 
 		auto addIfSceneMember = [&](std::size_t i)
-		{
-			if (table[i].sceneMember && !wantedFlag[i])
 			{
-				wantedFlag[i] = true;
-				wanted.push_back(table[i].index);
-			}
-		};
+				if (table[i].sceneMember && !wantedFlag[i])
+				{
+					wantedFlag[i] = true;
+					wanted.push_back(table[i].index);
+				}
+			};
 
 		for (std::size_t i = 0; i < table.size(); ++i)
 			addIfSceneMember(i);
 
-	
 		for (std::size_t i = 0; i < table.size(); ++i)
 		{
 			if (table[i].parentIndex >= 0 &&
@@ -1084,7 +1070,6 @@ namespace
 			}
 		}
 
-		
 		for (std::size_t i = 0; i < table.size(); ++i)
 		{
 			if (table[i].parentIndex < 0 || wantedFlag[i])
@@ -1139,16 +1124,16 @@ namespace
 			<< " valid=" << table.size()
 			<< " scene301="
 			<< std::count_if(
-					table.begin(), table.end(),
-					[](const TableObj& e) { return e.sceneMember; })
+				table.begin(), table.end(),
+				[](const TableObj& e) { return e.sceneMember; })
 			<< " scene324="
 			<< std::count_if(
-					table.begin(), table.end(),
-					[](const TableObj& e) { return e.hactJudgeMember; })
+				table.begin(), table.end(),
+				[](const TableObj& e) { return e.hactJudgeMember; })
 			<< " cellHits="
 			<< std::count_if(
-					table.begin(), table.end(),
-					[](const TableObj& e) { return e.cellXSize; });
+				table.begin(), table.end(),
+				[](const TableObj& e) { return e.cellXSize; });
 
 		HJ::Logger::Info(summary.str());
 	}
@@ -1185,7 +1170,6 @@ namespace HJ::HUD::RadialDisc
 		const float lastRatio =
 			g_lastDumpedRatio.load(std::memory_order_relaxed);
 
-	
 		const bool anchorChanged =
 			(lastAnchor != 0 && lastAnchor != anchor);
 

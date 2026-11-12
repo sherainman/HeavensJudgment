@@ -48,7 +48,6 @@ namespace HJ::Hooks
 			);
 		}
 
-	
 		if (!HJ::HUD::HactOverlay::Initialize())
 		{
 			Logger::Warning(
@@ -56,7 +55,6 @@ namespace HJ::Hooks
 			);
 		}
 
-		
 		HJ::HUD::RadialDiscDrive::Initialize();
 
 		if (!ActionRequest::Initialize())
@@ -77,7 +75,6 @@ namespace HJ::Hooks
 			return false;
 		}
 
-		
 		if (!GuardMotion::Initialize())
 		{
 			Logger::Warning(

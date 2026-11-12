@@ -57,17 +57,14 @@ namespace
 		float health =
 			context.xmm6.f32[0];
 
-
 		if (!std::isfinite(health))
 			return;
-
 
 		if (health < 0.0f)
 			health = 0.0f;
 
 		if (health > 1.0f)
 			health = 1.0f;
-
 
 		g_healthRatio.store(
 			health,
@@ -79,15 +76,12 @@ namespace
 			std::memory_order_relaxed
 		);
 
-
 		g_healthHudController.store(
 			context.rdi,
 			std::memory_order_relaxed
 		);
-
 	}
 }
-
 
 namespace HJ::HUD::RadialHealthBridge
 {
@@ -96,8 +90,7 @@ namespace HJ::HUD::RadialHealthBridge
 		g_moduleBase =
 			reinterpret_cast<std::uintptr_t>(
 				GetModuleHandleW(nullptr)
-			);
-
+				);
 
 		if (!g_moduleBase)
 		{
@@ -107,7 +100,6 @@ namespace HJ::HUD::RadialHealthBridge
 
 			return false;
 		}
-
 
 		const std::uintptr_t healthTarget =
 			g_moduleBase + kHealthUpdateRva;
@@ -149,7 +141,6 @@ namespace HJ::HUD::RadialHealthBridge
 		return true;
 	}
 
-
 	float GetHealthRatio()
 	{
 		return g_healthRatio.load(
@@ -157,14 +148,12 @@ namespace HJ::HUD::RadialHealthBridge
 		);
 	}
 
-
 	bool IsReady()
 	{
 		return g_healthReady.load(
 			std::memory_order_relaxed
 		);
 	}
-
 
 	std::uintptr_t GetHealthHudController()
 	{

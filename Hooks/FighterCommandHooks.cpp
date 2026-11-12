@@ -1,4 +1,5 @@
-﻿#pragma comment(lib, "Xinput.lib")
+﻿#define NOMINMAX
+#pragma comment(lib, "Xinput.lib")
 
 #include "FighterCommandHooks.hpp"
 #include "ActionRequestsHooks.hpp"
@@ -12,6 +13,7 @@
 #include <safetyhook.hpp>
 #include <Xinput.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <intrin.h>
 #include <sstream>
@@ -36,6 +38,9 @@ namespace
 	SafetyHookInline g_checkEligibilityHook{};
 	SafetyHookInline g_namedStateHook{};
 	SafetyHookInline g_controllerTranslateHook{};
+	SafetyHookInline g_processHitDamageHook{};
+	SafetyHookInline g_damageStateInitHook{};
+	SafetyHookInline g_enemyDamageDispatchHook{};
 
 	std::atomic<bool> g_f6WasDown{ false };
 	std::atomic<ULONGLONG> g_traceUntil{ 0 };
@@ -97,7 +102,6 @@ namespace
 	std::atomic<std::uintptr_t>
 		g_currentAttackContainer{ 0 };
 
-
 	// stun latch: stun mode owns the player container when active
 	std::atomic<bool>
 		g_playerStunned{ false };
@@ -107,7 +111,6 @@ namespace
 
 	constexpr ULONGLONG kStunLatchExpiryMs =
 		3000;
-
 
 	// test for attack steering / commitment
 
@@ -156,6 +159,33 @@ namespace
 	// Keep a short two-trigger tackle chord without delaying root kicks five frames.
 	constexpr ULONGLONG kTriggerChordWindowMs = 50;
 
+	// Dragon Engine resets thezse clock scales back to 1f at the top of every frame after clamping to >=0.02f
+	// channel 0 = world/physics, channel 1 = player, channel 2 = vfx/particles
+	constexpr std::uintptr_t kEngineWorldTimeScaleRva = 0x05313460;
+	constexpr std::uintptr_t kEnginePlayerTimeScaleRva = 0x05313464;
+	constexpr std::uintptr_t kEngineVfxTimeScaleRva = 0x05313468;
+
+	struct HitstopState
+	{
+		std::atomic<std::uint64_t> sequence{ 0 };
+		ULONGLONG startedAt = 0;
+		float holdMs = 0.0f;
+		float releaseMs = 0.0f;
+		float intensity = 0.0f;
+		float dirX = 0.0f;
+		bool playerBlock = false;
+	};
+
+	HitstopState g_hitstop{};
+
+	enum class EnemyReactionKind : std::uint8_t
+	{
+		None,
+		StandardHit,
+		HeavyKnockdown,
+		BlockedHit
+	};
+
 	struct TraceEntry
 	{
 		std::uint32_t key;
@@ -172,8 +202,8 @@ namespace
 				mode == other.mode &&
 				option == other.option &&
 				caller == other.caller &&
-					eligible == other.eligible &&
-					attackSerial == other.attackSerial;
+				eligible == other.eligible &&
+				attackSerial == other.attackSerial;
 		}
 	};
 
@@ -543,7 +573,6 @@ namespace
 
 			default:
 				break;
-
 			}
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER)
@@ -693,7 +722,7 @@ namespace
 		const bool waitingForFollowUp =
 			HasBufferedFollowUp(sourceCommand, action) &&
 			g_currentAttackCommand.load() ==
-				sourceCommand;
+			sourceCommand;
 
 		if (now > expiresAt &&
 			!waitingForFollowUp)
@@ -754,7 +783,7 @@ namespace
 			TraceCadence("first-transport-on", static_cast<std::uint32_t>(action));
 	}
 
-		bool IsGameplayInputActive()
+	bool IsGameplayInputActive()
 	{
 		const ULONGLONG last =
 			g_lastPlayerCombatUpdateAt.load();
@@ -769,35 +798,35 @@ namespace
 			kGameplayInputFreshnessMs;
 	}
 
-		// attempting to add attack steering and commitment layers to lj
+	// attempting to add attack steering and commitment layers to lj
 
-		float GetRH1SteeringAuthority(
-			ULONGLONG elapsedMs)
-		{
-			constexpr ULONGLONG kFreeSteerUntilMs = 100;
-			constexpr ULONGLONG kFullyCommittedAtMs = 320;
+	float GetRH1SteeringAuthority(
+		ULONGLONG elapsedMs)
+	{
+		constexpr ULONGLONG kFreeSteerUntilMs = 100;
+		constexpr ULONGLONG kFullyCommittedAtMs = 320;
 
-			if (elapsedMs <= kFreeSteerUntilMs)
-				return 1.0f;
+		if (elapsedMs <= kFreeSteerUntilMs)
+			return 1.0f;
 
-			if (elapsedMs >= kFullyCommittedAtMs)
-				return 0.0f;
+		if (elapsedMs >= kFullyCommittedAtMs)
+			return 0.0f;
 
-			const float t =
-				static_cast<float>(
-					elapsedMs - kFreeSteerUntilMs
-					) /
-				static_cast<float>(
-					kFullyCommittedAtMs -
-					kFreeSteerUntilMs
-					);
+		const float t =
+			static_cast<float>(
+				elapsedMs - kFreeSteerUntilMs
+				) /
+			static_cast<float>(
+				kFullyCommittedAtMs -
+				kFreeSteerUntilMs
+				);
 
-			// smooth 1 -> 0
-			const float smooth =
-				t * t * (3.0f - 2.0f * t);
+		// smooth 1 -> 0
+		const float smooth =
+			t * t * (3.0f - 2.0f * t);
 
-			return 1.0f - smooth;
-		}
+		return 1.0f - smooth;
+	}
 
 	bool HasLegFollowUp(
 		std::uint32_t packedCommand,
@@ -805,7 +834,7 @@ namespace
 	{
 		return
 			(action == HJAction::RightLeg ||
-			 action == HJAction::LeftLeg) &&
+				action == HJAction::LeftLeg) &&
 			HasBufferedFollowUp(packedCommand, action);
 	}
 
@@ -1027,7 +1056,6 @@ namespace
 			}
 		}
 
-
 		const bool physicalRB =
 			(state.Gamepad.wButtons &
 				XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
@@ -1148,19 +1176,19 @@ namespace
 
 			const bool cancelled =
 				g_pendingTriggerCancelSequence !=
-					g_triggerCancelSequence.load();
+				g_triggerCancelSequence.load();
 
 			const bool sameQueuedKick =
 				g_buffer.sequence.load() ==
-					g_pendingTriggerSequence &&
+				g_pendingTriggerSequence &&
 				g_buffer.action.load() == pendingAction &&
 				g_buffer.sourceCommand.load() ==
-					g_currentAttackCommand.load();
+				g_currentAttackCommand.load();
 
 			if (cancelled ||
 				(alreadyQueued && !sameQueuedKick) ||
 				now - g_pendingTriggerStart >=
-					kTriggerChordWindowMs)
+				kTriggerChordWindowMs)
 			{
 				if (!cancelled && !alreadyQueued)
 					QueueHJAction(pendingAction);
@@ -1183,7 +1211,7 @@ namespace
 		// a second trigger can replace the kick only while it is still queued
 		else if (!physicalCircle &&
 			((g_pendingTrigger == PendingTrigger::RightLeg && ltPressed) ||
-			(g_pendingTrigger == PendingTrigger::LeftLeg && rtPressed)))
+				(g_pendingTrigger == PendingTrigger::LeftLeg && rtPressed)))
 		{
 			g_pendingTrigger = PendingTrigger::None;
 			g_pendingTriggerSequence = 0;
@@ -1275,7 +1303,6 @@ namespace
 			if (fighting && !previousFighting)
 			{
 				g_lockOnEnabled.store(false);
-
 			}
 			else if (!fighting && previousFighting)
 			{
@@ -1445,6 +1472,606 @@ namespace
 		}
 	}
 
+	float SmootherStep01(float value) noexcept
+	{
+		value = std::clamp(value, 0.0f, 1.0f);
+		return value * value * value * (value * (value * 6.0f - 15.0f) + 10.0f);
+	}
+
+	void ApplyEngineClockScales(
+		std::uintptr_t base,
+		float worldScale,
+		float playerScale,
+		float vfxScale) noexcept
+	{
+		if (base == 0)
+			return;
+
+		__try
+		{
+			auto* worldPtr = reinterpret_cast<float*>(base + kEngineWorldTimeScaleRva);
+			auto* playerPtr = reinterpret_cast<float*>(base + kEnginePlayerTimeScaleRva);
+			auto* vfxPtr = reinterpret_cast<float*>(base + kEngineVfxTimeScaleRva);
+
+			// never overwrite a deeper native slow-mo (mortal reversal, ex boost, etc.)
+			if (*worldPtr > worldScale)
+				*worldPtr = worldScale;
+
+			if (*playerPtr > playerScale)
+				*playerPtr = playerScale;
+
+			if (*vfxPtr > vfxScale)
+				*vfxPtr = vfxScale;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+		}
+	}
+
+	void ExtendInputBuffersForHitstop(ULONGLONG extraMs) noexcept
+	{
+		if (extraMs == 0)
+			return;
+
+		if (g_buffer.action.load(std::memory_order_acquire) != HJAction::None)
+		{
+			const ULONGLONG currentExpiry =
+				g_buffer.expiresAt.load(std::memory_order_relaxed);
+
+			if (currentExpiry != 0)
+			{
+				g_buffer.expiresAt.store(
+					currentExpiry + extraMs,
+					std::memory_order_release
+				);
+			}
+		}
+
+		if (g_pendingTrigger != PendingTrigger::None &&
+			g_pendingTriggerStart != 0)
+		{
+			g_pendingTriggerStart += extraMs;
+		}
+	}
+
+	enum class AttackHitZone : std::uint8_t
+	{
+		None,
+		LightHead,
+		GutBody,
+		UppercutOrLauncher
+	};
+
+	struct BoxerAttackSpec
+	{
+		AttackHitZone zone = AttackHitZone::LightHead;
+		float holdMs = 45.0f;
+		float releaseMs = 60.0f;
+		float intensity = 0.60f;
+		float dirX = 1.0f;
+	};
+
+	struct EnemyStaggerSlot
+	{
+		std::uintptr_t container = 0;
+		ULONGLONG lastHitAt = 0;
+		ULONGLONG gutStaggerUntil = 0;
+		std::uint32_t comboCount = 0;
+	};
+
+	constexpr std::size_t kEnemyStaggerSlotCount = 16;
+	EnemyStaggerSlot g_enemyStaggerSlots[kEnemyStaggerSlotCount]{};
+
+	EnemyStaggerSlot& AcquireEnemyStaggerSlot(
+		std::uintptr_t stateContainer,
+		ULONGLONG now) noexcept
+	{
+		std::size_t oldestIndex = 0;
+		ULONGLONG oldestTick = ~0ULL;
+
+		for (std::size_t i = 0; i < kEnemyStaggerSlotCount; ++i)
+		{
+			if (g_enemyStaggerSlots[i].container == stateContainer)
+				return g_enemyStaggerSlots[i];
+
+			if (g_enemyStaggerSlots[i].container == 0)
+			{
+				oldestIndex = i;
+				break;
+			}
+
+			if (g_enemyStaggerSlots[i].lastHitAt < oldestTick)
+			{
+				oldestTick = g_enemyStaggerSlots[i].lastHitAt;
+				oldestIndex = i;
+			}
+		}
+
+		EnemyStaggerSlot& slot = g_enemyStaggerSlots[oldestIndex];
+		slot.container = stateContainer;
+		slot.lastHitAt = now;
+		slot.gutStaggerUntil = 0;
+		slot.comboCount = 0;
+		return slot;
+	}
+
+	bool IsEnemyGutStaggered(
+		std::uintptr_t stateContainer,
+		ULONGLONG now,
+		std::uint32_t& outComboCount) noexcept
+	{
+		outComboCount = 0;
+		for (std::size_t i = 0; i < kEnemyStaggerSlotCount; ++i)
+		{
+			const EnemyStaggerSlot& slot = g_enemyStaggerSlots[i];
+			if (slot.container == stateContainer)
+			{
+				if (now >= slot.lastHitAt && (now - slot.lastHitAt) <= 1350)
+					outComboCount = slot.comboCount;
+				return slot.gutStaggerUntil != 0 && now <= slot.gutStaggerUntil;
+			}
+		}
+		return false;
+	}
+
+	bool GetBoxerAttackSpecs(
+		std::uint32_t packedCommand,
+		BoxerAttackSpec& outSpec) noexcept
+	{
+		if ((packedCommand & 0xFFFF) != 0x73)
+			return false;
+
+		const std::uint32_t variant = packedCommand >> 16;
+		if (variant >= 0x16 && variant <= 0x19)
+			return false; // Tackle moves use dedicated camera sequencing
+
+		switch (variant)
+		{
+			// Jabs & lead straights (quick head snap)
+		case 0x01: case 0x14:
+			outSpec = { AttackHitZone::LightHead, 34.0f, 48.0f, 0.45f, 1.0f };
+			return true;
+		case 0x05: case 0x26:
+			outSpec = { AttackHitZone::LightHead, 34.0f, 48.0f, 0.45f, -1.0f };
+			return true;
+
+			// Body hooks & gut blows (midsection fold)
+		case 0x02: case 0x2C:
+			outSpec = { AttackHitZone::GutBody, 60.0f, 78.0f, 0.78f, 1.0f };
+			return true;
+		case 0x06: case 0x0D: case 0x2D: case 0x32: case 0x35:
+			outSpec = { AttackHitZone::GutBody, 60.0f, 78.0f, 0.78f, -1.0f };
+			return true;
+
+			// Heavy uppercuts & string finishers
+		case 0x03: case 0x04: case 0x15: case 0x1E: case 0x23:
+		case 0x29: case 0x34: case 0x37: case 0x38: case 0x3C:
+			outSpec = { AttackHitZone::UppercutOrLauncher, 88.0f, 112.0f, 1.15f, 1.0f };
+			return true;
+		case 0x07: case 0x08: case 0x12: case 0x1B: case 0x2A:
+		case 0x31: case 0x3A: case 0x3B:
+			outSpec = { AttackHitZone::UppercutOrLauncher, 88.0f, 112.0f, 1.15f, -1.0f };
+			return true;
+
+			// Mid kicks & knees (stomach drive)
+		case 0x09: case 0x11: case 0x1F: case 0x27: case 0x2E:
+			outSpec = { AttackHitZone::GutBody, 70.0f, 90.0f, 0.95f, 1.0f };
+			return true;
+		case 0x0C: case 0x10: case 0x28: case 0x2F:
+			outSpec = { AttackHitZone::GutBody, 70.0f, 90.0f, 0.95f, -1.0f };
+			return true;
+
+			// High / lifting kicks & knees
+		case 0x0A: case 0x0B: case 0x0E: case 0x1A: case 0x25: case 0x33: case 0x39:
+			outSpec = { AttackHitZone::UppercutOrLauncher, 70.0f, 90.0f, 0.95f, 1.0f };
+			return true;
+		case 0x0F: case 0x13: case 0x1C: case 0x1D: case 0x20:
+		case 0x22: case 0x2B: case 0x36: case 0x3D:
+			outSpec = { AttackHitZone::UppercutOrLauncher, 70.0f, 90.0f, 0.95f, -1.0f };
+			return true;
+
+		default:
+			outSpec = { AttackHitZone::LightHead, 45.0f, 60.0f, 0.60f, 1.0f };
+			return true;
+		}
+	}
+
+	void ApplyHitPacketReactionOverrides(
+		std::uintptr_t hitPacket,
+		std::uint32_t targetDamageLevel,
+		bool forceKnockdown,
+		std::uint8_t hitHeightZone = 0,
+		std::uint8_t hitDirection = 0) noexcept
+	{
+		if (hitPacket == 0)
+			return;
+
+		__try
+		{
+			auto* levelPtr =
+				reinterpret_cast<std::uint32_t*>(hitPacket + 0x80);
+			auto* heightPtr =
+				reinterpret_cast<std::uint8_t*>(hitPacket + 0x60);
+			auto* dirPtr =
+				reinterpret_cast<std::uint8_t*>(hitPacket + 0x61);
+
+			if (hitHeightZone != 0)
+			{
+				*heightPtr = hitHeightZone;
+			}
+			*dirPtr = hitDirection;
+
+			if (forceKnockdown)
+			{
+				// Clean grounded knockdown (lvl4): enemy drops right to the floor
+				*heightPtr = 1;
+				*levelPtr = 4u;
+			}
+			else if (targetDamageLevel > 0)
+			{
+				*levelPtr = targetDamageLevel;
+			}
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+		}
+	}
+
+	void ApplyDamageStateHitZoneOverride(
+		std::uintptr_t stateObject,
+		std::uint8_t hitZoneByte,
+		std::uint32_t standingLevelOverride) noexcept
+	{
+		if (stateObject == 0)
+			return;
+
+		__try
+		{
+			// +0x430 is the attack collision hit height (1 = head/high, 2 = gut/body)
+			if (hitZoneByte != 0)
+			{
+				*reinterpret_cast<std::uint8_t*>(stateObject + 0x430) =
+					hitZoneByte;
+			}
+
+			// +0x110 is hitPacket+0x80 inside the state object; 0 means knockdown/launch,
+			// 1..4 are standing stagger severities
+			auto* embeddedLevel =
+				reinterpret_cast<std::uint32_t*>(stateObject + 0x110);
+			if (*embeddedLevel != 0 && standingLevelOverride != 0)
+			{
+				*embeddedLevel = standingLevelOverride;
+			}
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+		}
+	}
+
+	bool IsDamageStateObjectKnockdown(const void* stateObject) noexcept
+	{
+		if (stateObject == nullptr)
+			return false;
+
+		__try
+		{
+			const auto addr = reinterpret_cast<std::uintptr_t>(stateObject);
+			return *reinterpret_cast<const std::uint32_t*>(addr + 0x110) == 0;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	EnemyReactionKind ClassifyEnemyReactionState(
+		const char* stateName,
+		const void* stateObject) noexcept
+	{
+		if (stateName == nullptr)
+			return EnemyReactionKind::None;
+
+		if (SafeStrEquals(stateName, "HumanEnemyDamage") ||
+			SafeStrEquals(stateName, "HumanDamage") ||
+			SafeStrEquals(stateName, "TigerDamage") ||
+			SafeStrEquals(stateName, "SimpleDamage"))
+		{
+			if (IsDamageStateObjectKnockdown(stateObject))
+				return EnemyReactionKind::HeavyKnockdown;
+
+			return EnemyReactionKind::StandardHit;
+		}
+
+		if (SafeStrEquals(stateName, "TigerFlyDamage") ||
+			SafeStrEquals(stateName, "FlyDamageF") ||
+			SafeStrEquals(stateName, "FlyDamageB") ||
+			SafeStrEquals(stateName, "FlyDamageL") ||
+			SafeStrEquals(stateName, "FlyDamageR") ||
+			SafeStrEquals(stateName, "RagdollShotDamage") ||
+			SafeStrEquals(stateName, "RagdollInstant") ||
+			SafeStrEquals(stateName, "RagdollDown") ||
+			SafeStrEquals(stateName, "RagdollDead") ||
+			SafeStrEquals(stateName, "SimpleDead") ||
+			SafeStrEquals(stateName, "GuardBreak") ||
+			SafeStrEquals(stateName, "GuardBreakDamage") ||
+			SafeStrEquals(stateName, "JustGuardBreakDamage"))
+		{
+			return EnemyReactionKind::HeavyKnockdown;
+		}
+
+		if (SafeStrEquals(stateName, "GuardReaction") ||
+			SafeStrEquals(stateName, "FriendlyGuard"))
+		{
+			return EnemyReactionKind::BlockedHit;
+		}
+
+		return EnemyReactionKind::None;
+	}
+
+	void CommitHitstopImpulse(
+		float holdMs,
+		float releaseMs,
+		float intensity,
+		float dirX,
+		bool isPlayerBlock) noexcept
+	{
+		const ULONGLONG now = GetTickCount64();
+		const ULONGLONG prevStart = g_hitstop.startedAt;
+		const float prevHold = g_hitstop.holdMs;
+		const float prevRelease = g_hitstop.releaseMs;
+		const float prevTotal = prevHold + prevRelease;
+
+		const bool active =
+			prevStart != 0 &&
+			now >= prevStart &&
+			static_cast<float>(now - prevStart) < prevTotal;
+
+		// Multi-target cleave damping: slightly extend the active hold if another hit registers within 55ms
+		if (active && (now - prevStart) <= 55)
+		{
+			const float extendedHold = std::min(prevHold + 14.0f, 115.0f);
+			const float addedMs = std::max(0.0f, extendedHold - prevHold);
+
+			g_hitstop.holdMs = extendedHold;
+			g_hitstop.releaseMs = std::max(prevRelease, releaseMs);
+			g_hitstop.intensity = std::max(g_hitstop.intensity, intensity);
+
+			ExtendInputBuffersForHitstop(static_cast<ULONGLONG>(addedMs + 0.5f));
+			HJ::Hooks::FighterCommand::TickHitstopFrameScale();
+			return;
+		}
+
+		g_hitstop.holdMs = holdMs;
+		g_hitstop.releaseMs = releaseMs;
+		g_hitstop.intensity = intensity;
+		g_hitstop.dirX = dirX;
+		g_hitstop.playerBlock = isPlayerBlock;
+		g_hitstop.startedAt = now;
+		g_hitstop.sequence.fetch_add(1, std::memory_order_release);
+
+		ExtendInputBuffersForHitstop(static_cast<ULONGLONG>(holdMs + releaseMs * 0.5f));
+		HJ::Hooks::FighterCommand::TickHitstopFrameScale();
+	}
+
+	void TryShapeEnemyHitPacket(
+		std::uintptr_t stateContainer,
+		std::uintptr_t hitPacket) noexcept
+	{
+		if (stateContainer == 0 || hitPacket == 0)
+			return;
+
+		if (g_tackleActive.load(std::memory_order_acquire))
+			return;
+
+		const std::uintptr_t playerObject = HJ_GetPlayerCombatObject();
+		if (playerObject == 0 || stateContainer == playerObject)
+			return;
+
+		const std::uint32_t currentAttack =
+			g_currentAttackCommand.load(std::memory_order_acquire);
+		const ULONGLONG attackStartedAt =
+			g_currentAttackStartedAt.load(std::memory_order_acquire);
+		if (currentAttack == 0 || attackStartedAt == 0)
+			return;
+
+		const ULONGLONG now = GetTickCount64();
+		if (now < attackStartedAt || (now - attackStartedAt) > 900)
+			return;
+
+		BoxerAttackSpec spec{};
+		if (!GetBoxerAttackSpecs(currentAttack, spec))
+			return;
+
+		std::uint32_t comboCount = 0;
+		const bool gutStaggered =
+			IsEnemyGutStaggered(stateContainer, now, comboCount);
+
+		EnemyStaggerSlot& slot =
+			AcquireEnemyStaggerSlot(stateContainer, now);
+		const bool chained =
+			(now >= slot.lastHitAt && (now - slot.lastHitAt) <= 1350);
+		slot.comboCount = chained ? (slot.comboCount + 1) : 1;
+		slot.lastHitAt = now;
+
+		if (spec.zone == AttackHitZone::LightHead)
+		{
+			// Light head/straight: crisp head flinch
+			ApplyHitPacketReactionOverrides(hitPacket, 0, false, 1, 0);
+		}
+		else if (spec.zone == AttackHitZone::GutBody)
+		{
+			// gut/body blow flds enemy forward clutching stomach; 1.25s follow-up window
+			slot.gutStaggerUntil = now + 1250;
+			ApplyHitPacketReactionOverrides(hitPacket, 0, false, 2, 0);
+		}
+		else if (spec.zone == AttackHitZone::UppercutOrLauncher)
+		{
+			// Uppercut forces grounded knockdown if enemy is gutstaggered
+			if (gutStaggered)
+			{
+				slot.gutStaggerUntil = 0;
+				slot.comboCount = 0;
+				ApplyHitPacketReactionOverrides(hitPacket, 0, true, 1, 0);
+			}
+			else
+			{
+				ApplyHitPacketReactionOverrides(hitPacket, 0, false, 1, 0);
+			}
+		}
+	}
+
+	bool __fastcall ProcessFighterHitDamageHook(
+		std::uintptr_t stateContainer,
+		std::uintptr_t hitPacket)
+	{
+		TryShapeEnemyHitPacket(stateContainer, hitPacket);
+
+		return g_processHitDamageHook.call<bool>(
+			stateContainer,
+			hitPacket
+		);
+	}
+
+	bool __fastcall EnemyDamageDispatchHook(
+		std::uintptr_t stateContainer,
+		std::uintptr_t hitPacket)
+	{
+		TryShapeEnemyHitPacket(stateContainer, hitPacket);
+
+		return g_enemyDamageDispatchHook.call<bool>(
+			stateContainer,
+			hitPacket
+		);
+	}
+
+	void* __fastcall DamageStateInitHook(
+		std::uintptr_t stateObject,
+		std::uintptr_t stateContainer,
+		std::uintptr_t hitPacket)
+	{
+		void* result = g_damageStateInitHook.call<void*>(
+			stateObject,
+			stateContainer,
+			hitPacket
+		);
+
+		const std::uintptr_t playerObject = HJ_GetPlayerCombatObject();
+		if (playerObject != 0 &&
+			stateContainer != 0 &&
+			stateContainer != playerObject &&
+			!g_tackleActive.load(std::memory_order_acquire))
+		{
+			const std::uint32_t currentAttack =
+				g_currentAttackCommand.load(std::memory_order_acquire);
+			const ULONGLONG attackStartedAt =
+				g_currentAttackStartedAt.load(std::memory_order_acquire);
+			const ULONGLONG now = GetTickCount64();
+
+			if (currentAttack != 0 &&
+				attackStartedAt != 0 &&
+				now >= attackStartedAt &&
+				(now - attackStartedAt) <= 900)
+			{
+				BoxerAttackSpec spec{};
+				if (GetBoxerAttackSpecs(currentAttack, spec))
+				{
+					EnemyStaggerSlot& slot =
+						AcquireEnemyStaggerSlot(stateContainer, now);
+					const bool chained =
+						(now >= slot.lastHitAt && (now - slot.lastHitAt) <= 1350);
+					slot.comboCount = chained ? (slot.comboCount + 1) : 1;
+					slot.lastHitAt = now;
+
+					if (IsDamageStateObjectKnockdown(
+						reinterpret_cast<const void*>(stateObject)))
+					{
+						slot.gutStaggerUntil = 0;
+						slot.comboCount = 0;
+					}
+					else if (spec.zone == AttackHitZone::GutBody)
+					{
+						// Gut/body blow folds the enemy forward; 1.25s follow-up window
+						slot.gutStaggerUntil = now + 1250;
+						ApplyDamageStateHitZoneOverride(stateObject, 2, 0);
+					}
+					else if (spec.zone == AttackHitZone::LightHead ||
+						spec.zone == AttackHitZone::UppercutOrLauncher)
+					{
+						ApplyDamageStateHitZoneOverride(stateObject, 1, 0);
+					}
+				}
+			}
+		}
+
+		return result;
+	}
+
+	void TryTriggerEnemyHitstop(
+		std::uintptr_t stateContainer,
+		const void* stateObject,
+		const char* stateName) noexcept
+	{
+		if (stateContainer == 0 || stateName == nullptr)
+			return;
+
+		if (g_tackleActive.load(std::memory_order_acquire))
+			return;
+
+		const std::uintptr_t playerObject = HJ_GetPlayerCombatObject();
+		if (playerObject == 0 || stateContainer == playerObject)
+			return;
+
+		const std::uint32_t currentAttack =
+			g_currentAttackCommand.load(std::memory_order_acquire);
+		const ULONGLONG attackStartedAt =
+			g_currentAttackStartedAt.load(std::memory_order_acquire);
+
+		if (currentAttack == 0 || attackStartedAt == 0)
+			return;
+
+		const ULONGLONG now = GetTickCount64();
+		if (now < attackStartedAt || (now - attackStartedAt) > 900)
+			return;
+
+		const EnemyReactionKind reaction =
+			ClassifyEnemyReactionState(stateName, stateObject);
+		if (reaction == EnemyReactionKind::None)
+			return;
+
+		if (reaction == EnemyReactionKind::HeavyKnockdown)
+		{
+			EnemyStaggerSlot& slot =
+				AcquireEnemyStaggerSlot(stateContainer, now);
+			slot.gutStaggerUntil = 0;
+			slot.comboCount = 0;
+		}
+
+		BoxerAttackSpec spec{};
+		if (!GetBoxerAttackSpecs(currentAttack, spec))
+			return;
+
+		if (reaction == EnemyReactionKind::HeavyKnockdown)
+		{
+			spec.holdMs += 22.0f;
+			spec.releaseMs += 32.0f;
+			spec.intensity = std::min(spec.intensity * 1.25f, 1.40f);
+		}
+		else if (reaction == EnemyReactionKind::BlockedHit)
+		{
+			spec.holdMs = std::clamp(spec.holdMs * 0.58f, 22.0f, 36.0f);
+			spec.releaseMs = 38.0f;
+			spec.intensity = std::max(spec.intensity * 0.65f, 0.42f);
+		}
+
+		CommitHitstopImpulse(
+			spec.holdMs,
+			spec.releaseMs,
+			spec.intensity,
+			spec.dirX,
+			false
+		);
+	}
+
 	void* __fastcall NamedStateHook(
 		std::uintptr_t stateContainer,
 		void* stateObject,
@@ -1569,17 +2196,22 @@ namespace
 		);
 
 		if (result != nullptr &&
-			result == stateObject &&
-			SafeStrEquals(stateName, "PlayerSway"))
+			result == stateObject)
 		{
-			HJ::Hooks::ActionRequest::
-				NotifyEvadeAccepted(stateContainer);
+			if (SafeStrEquals(stateName, "PlayerSway"))
+			{
+				HJ::Hooks::ActionRequest::
+					NotifyEvadeAccepted(stateContainer);
+			}
+			else
+			{
+				TryTriggerEnemyHitstop(stateContainer, stateObject, stateName);
+			}
 		}
 
 		return result;
 	}
 
-	
 	std::uint64_t __fastcall CheckEligibilityHook(
 		std::uint64_t context,
 		std::uint32_t key,
@@ -1671,7 +2303,6 @@ namespace
 
 namespace HJ::Hooks::FighterCommand
 {
-
 	bool IsCombatTraceActive()
 	{
 		return IsTraceActive();
@@ -1756,6 +2387,140 @@ namespace HJ::Hooks::FighterCommand
 		);
 	}
 
+	extern "C"
+		__declspec(dllexport)
+		bool HJ_GetHitImpactState(
+			std::uint64_t* outSequence,
+			std::uint64_t* outStartTick,
+			float* outHoldMs,
+			float* outReleaseMs,
+			float* outIntensity,
+			float* outDirX)
+	{
+		if (!outSequence || !outStartTick ||
+			!outHoldMs || !outReleaseMs ||
+			!outIntensity || !outDirX)
+		{
+			return false;
+		}
+
+		const std::uint64_t seq =
+			g_hitstop.sequence.load(std::memory_order_acquire);
+		const ULONGLONG startedAt = g_hitstop.startedAt;
+
+		if (seq == 0 || startedAt == 0)
+			return false;
+
+		*outSequence = seq;
+		*outStartTick = startedAt;
+		*outHoldMs = g_hitstop.holdMs;
+		*outReleaseMs = g_hitstop.releaseMs;
+		*outIntensity = g_hitstop.intensity;
+		*outDirX = g_hitstop.dirX;
+		return true;
+	}
+
+	void NotifyPlayerBlockedHit() noexcept
+	{
+		if (g_tackleActive.load(std::memory_order_acquire))
+			return;
+
+		const int side = HJ::Hooks::GuardDirection::CurrentSideId();
+		const float dirX =
+			side == 1 ? -1.0f :
+			side == 2 ? 1.0f : 0.0f;
+
+		CommitHitstopImpulse(26.0f, 40.0f, 0.60f, dirX, true);
+	}
+
+	void TickHitstopFrameScale() noexcept
+	{
+		const ULONGLONG startedAt = g_hitstop.startedAt;
+		if (startedAt == 0)
+			return;
+
+		if (g_tackleActive.load(std::memory_order_acquire))
+		{
+			g_hitstop.startedAt = 0;
+			return;
+		}
+
+		const ULONGLONG now = GetTickCount64();
+		if (now < startedAt)
+			return;
+
+		const float holdMs = g_hitstop.holdMs;
+		const float releaseMs = g_hitstop.releaseMs;
+		const float intensity = g_hitstop.intensity;
+		const float totalMs = holdMs + releaseMs;
+		const float elapsed = static_cast<float>(now - startedAt);
+
+		if (elapsed >= totalMs || totalMs <= 0.0f)
+		{
+			g_hitstop.startedAt = 0;
+			return;
+		}
+
+		const auto base =
+			reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+		if (base == 0)
+			return;
+
+		const bool isPlayerBlock = g_hitstop.playerBlock;
+
+		// Normalized impact intensity weighting
+		const float weight01 =
+			std::clamp((intensity - 0.40f) / 0.85f, 0.0f, 1.0f);
+		const float troughFloor =
+			0.18f - 0.10f * weight01;
+		const float vfxFloor =
+			0.38f - 0.10f * weight01;
+		const float easeInMs =
+			std::clamp(holdMs * 0.25f, 12.0f, 24.0f);
+
+		float worldScale = 1.0f;
+		float playerScale = 1.0f;
+		float vfxScale = 1.0f;
+
+		if (elapsed < easeInMs && easeInMs > 0.0f)
+		{
+			const float inT = SmootherStep01(elapsed / easeInMs);
+			worldScale = 1.0f - (1.0f - troughFloor) * inT;
+			playerScale = worldScale;
+			vfxScale = 1.0f - (1.0f - vfxFloor) * inT;
+		}
+		else if (elapsed < holdMs)
+		{
+			const float holdSpan = std::max(1.0f, holdMs - easeInMs);
+			const float holdT = SmootherStep01((elapsed - easeInMs) / holdSpan);
+
+			const float worldEnd = troughFloor + 0.020f;
+			const float playerEnd =
+				isPlayerBlock ? worldEnd : (troughFloor + 0.035f);
+
+			worldScale = troughFloor + (worldEnd - troughFloor) * holdT;
+			playerScale = troughFloor + (playerEnd - troughFloor) * holdT;
+			vfxScale = vfxFloor + 0.05f * holdT;
+		}
+		else if (releaseMs > 0.0f)
+		{
+			const float u =
+				std::clamp((elapsed - holdMs) / releaseMs, 0.0f, 1.0f);
+			const float easeOut = SmootherStep01(u);
+
+			const float worldStart = troughFloor + 0.020f;
+			const float playerStart =
+				isPlayerBlock ? worldStart : (troughFloor + 0.035f);
+			const float vfxStart = vfxFloor + 0.05f;
+
+			worldScale = worldStart + (1.0f - worldStart) * easeOut;
+			playerScale = playerStart + (1.0f - playerStart) * easeOut;
+			vfxScale = vfxStart + (1.0f - vfxStart) * easeOut;
+		}
+
+		ApplyEngineClockScales(base, worldScale, playerScale, vfxScale);
+	}
+
 	void ResetCurrentAttackTracking()
 	{
 		g_currentAttackCommand.store(0);
@@ -1778,6 +2543,7 @@ namespace HJ::Hooks::FighterCommand
 			GetTickCount64()
 		);
 
+		TickHitstopFrameScale();
 		HJ::Hooks::GuardMotion::Tick();
 	}
 
@@ -1802,16 +2568,13 @@ namespace HJ::Hooks::FighterCommand
 
 		// xinput_pollandtranslatecontroller
 
-
 		constexpr std::uintptr_t ControllerTranslateRva =
 			0x019F2EC0;
-
 
 		constexpr std::uintptr_t CheckEligibilityRva =
 			0x02E8F500;
 
 		// FUN_1403B43D0
-
 
 		constexpr std::uintptr_t NamedStateRva =
 			0x003B43D0;
@@ -1932,6 +2695,66 @@ namespace HJ::Hooks::FighterCommand
 		Logger::Info(
 			"Controller translate hook installed."
 		);
+
+		constexpr std::uintptr_t ProcessHitDamageRva = 0x02EE4CA0;
+		constexpr std::uint8_t kExpectedProcessHitBytes[] = {
+			0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x18, 0x48, 0x89, 0x70, 0x20,
+			0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x81, 0xEC, 0xF0, 0x05, 0x00, 0x00
+		};
+
+		const auto processHitTarget = base + ProcessHitDamageRva;
+		if (std::memcmp(
+			reinterpret_cast<const void*>(processHitTarget),
+			kExpectedProcessHitBytes,
+			sizeof(kExpectedProcessHitBytes)) == 0)
+		{
+			g_processHitDamageHook = safetyhook::create_inline(
+				reinterpret_cast<void*>(processHitTarget),
+				reinterpret_cast<void*>(&ProcessFighterHitDamageHook)
+			);
+			if (g_processHitDamageHook)
+				Logger::Info("Fighter hit damage hook installed.");
+		}
+
+		constexpr std::uintptr_t DamageStateInitRva = 0x02EE2B10;
+		constexpr std::uint8_t kExpectedDamageInitBytes[] = {
+			0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x4C, 0x24, 0x08,
+			0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57
+		};
+
+		const auto damageInitTarget = base + DamageStateInitRva;
+		if (std::memcmp(
+			reinterpret_cast<const void*>(damageInitTarget),
+			kExpectedDamageInitBytes,
+			sizeof(kExpectedDamageInitBytes)) == 0)
+		{
+			g_damageStateInitHook = safetyhook::create_inline(
+				reinterpret_cast<void*>(damageInitTarget),
+				reinterpret_cast<void*>(&DamageStateInitHook)
+			);
+			if (g_damageStateInitHook)
+				Logger::Info("Damage state init hook installed.");
+		}
+
+		constexpr std::uintptr_t EnemyDamageDispatchRva = 0x02F20220;
+		constexpr std::uint8_t kExpectedEnemyDispatchBytes[] = {
+			0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20,
+			0x57, 0x48, 0x81, 0xEC, 0x80, 0x03, 0x00, 0x00
+		};
+
+		const auto enemyDispatchTarget = base + EnemyDamageDispatchRva;
+		if (std::memcmp(
+			reinterpret_cast<const void*>(enemyDispatchTarget),
+			kExpectedEnemyDispatchBytes,
+			sizeof(kExpectedEnemyDispatchBytes)) == 0)
+		{
+			g_enemyDamageDispatchHook = safetyhook::create_inline(
+				reinterpret_cast<void*>(enemyDispatchTarget),
+				reinterpret_cast<void*>(&EnemyDamageDispatchHook)
+			);
+			if (g_enemyDamageDispatchHook)
+				Logger::Info("Enemy damage dispatch hook installed.");
+		}
 
 		HANDLE traceThread =
 			CreateThread(

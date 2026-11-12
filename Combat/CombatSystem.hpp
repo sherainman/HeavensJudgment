@@ -2,5 +2,5 @@
 
 namespace HJ::Combat
 {
-    bool IsInCombat();
+	bool IsInCombat();
 }

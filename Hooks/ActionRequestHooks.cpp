@@ -221,9 +221,8 @@ namespace
 			caller == 0x142EFC750 &&
 			SafeStrEquals(stateName, "Attack");
 
-
-		// HJ right leg uses square as its internal token in fightercommand, rt synthesizes square 
-		// but real square must not launch the kick too 
+		// HJ right leg uses square as its internal token in fightercommand, rt synthesizes square
+		// but real square must not launch the kick too
 		if (isPlayerAttack &&
 			packedCommand == kHJRightLeg1)
 		{
@@ -359,7 +358,6 @@ namespace
 		}
 	}
 
-
 	bool SafeMemEquals(
 		std::uintptr_t address,
 		const void* expected,
@@ -389,7 +387,7 @@ namespace
 		{
 			reinterpret_cast<HandleSwayRequestFn>(fnAddress)(
 				combatObject
-			);
+				);
 			return true;
 		}
 		__except (EXCEPTION_EXECUTE_HANDLER)
@@ -526,7 +524,6 @@ namespace
 		return st;
 	}
 
-
 	// interim exclusion rule (proven 2026-10-13: stance does NOT move
 	// e414 — it reads 1 locked-on or not). deny only on a deviating
 	// entity state; stance alone never denies. stun/down/weapon values
@@ -571,7 +568,7 @@ namespace
 		const auto eligibility =
 			reinterpret_cast<EligibilityFn>(
 				eligibilityAddress
-			);
+				);
 
 		return eligibility(
 			combatObject,
@@ -772,7 +769,6 @@ namespace
 		return true;
 	}
 
-
 	static std::uintptr_t ResolveMotionHandle(std::uint32_t handle) noexcept
 	{
 		const std::uintptr_t base =
@@ -938,7 +934,6 @@ namespace
 
 		return true;
 	}
-
 
 	bool PatchBoxerAvailability(
 		std::uintptr_t base)
@@ -1188,7 +1183,6 @@ namespace
 			return false;
 		}
 
-
 		if (g_havePreviousPlayerPosition)
 		{
 			const float dx =
@@ -1202,7 +1196,6 @@ namespace
 			const float distanceSquared =
 				dx * dx +
 				dz * dz;
-
 
 			// only update when facing from believable movement
 			// should give tackle approach direction without re yagamis
@@ -1232,13 +1225,11 @@ namespace
 			}
 		}
 
-
 		g_previousPlayerPosition =
 			current;
 
 		g_havePreviousPlayerPosition =
 			true;
-
 
 		g_playerPositionX.store(
 			current.x,
@@ -1254,7 +1245,6 @@ namespace
 			current.z,
 			std::memory_order_relaxed
 		);
-
 
 		g_playerTransformValid.store(
 			true,
@@ -1369,7 +1359,6 @@ namespace
 			moduleBase +
 			kVanillaSwayCallerRva;
 
-
 		if (kOwnVanillaEvadeInput &&
 			isCapturedPlayer &&
 			isVanillaEvadeRequest &&
@@ -1445,7 +1434,7 @@ namespace
 			context.rdi == playerObject &&
 			HJ::Combat::IsInCombat() &&
 			HJ::Hooks::FighterCommand::
-				IsRightHandTransportActive())
+			IsRightHandTransportActive())
 		{
 			// R2 still reaches fighter command, just not EX boost
 			context.rax &= ~std::uintptr_t{ 1 };
@@ -1499,7 +1488,6 @@ namespace
 				std::memory_order_release
 			);
 
-
 			if (playerEntity != 0)
 			{
 				HJ::Logger::Info(
@@ -1512,7 +1500,6 @@ namespace
 				);
 			}
 		}
-
 
 		const std::uint64_t previousEvadeSequence =
 			g_evadeAcceptedSequence.load(
@@ -1602,7 +1589,6 @@ namespace
 				std::memory_order_acquire
 			) != previousEvadeSequence;
 
-		
 		if (physicalAPressed && !HJ::Combat::IsInCombat())
 		{
 			const bool probeOk =
@@ -1611,7 +1597,6 @@ namespace
 			const EvadeEntityState estate =
 				ReadEvadeEntityState();
 
-			
 			std::uintptr_t combatVtable = 0;
 			SafeReadPointer(combatObject, combatVtable);
 
@@ -1726,8 +1711,6 @@ namespace
 				moduleBase + kHandleSwayRequestRva,
 				combatObject
 			);
-
-			
 		}
 
 		return result;
@@ -1763,7 +1746,6 @@ bool HJ_GetPlayerTransform(
 		return false;
 	}
 
-
 	outTransform->positionX =
 		g_playerPositionX.load(
 			std::memory_order_relaxed
@@ -1778,7 +1760,6 @@ bool HJ_GetPlayerTransform(
 		g_playerPositionZ.load(
 			std::memory_order_relaxed
 		);
-
 
 	outTransform->forwardX =
 		g_playerForwardX.load(
@@ -1795,10 +1776,8 @@ bool HJ_GetPlayerTransform(
 			std::memory_order_relaxed
 		);
 
-
 	return true;
 }
-
 
 void HJ::Hooks::ActionRequest::TraceAttackObject(
 	std::uintptr_t stateContainer,
@@ -1879,7 +1858,6 @@ namespace HJ::Hooks::ActionRequest
 				gameModule
 				);
 
-		
 		if (!PatchBoxerAvailability(
 			base))
 		{
@@ -1890,15 +1868,12 @@ namespace HJ::Hooks::ActionRequest
 			return false;
 		}
 
-
 		// StartAttackBehaviorFromPackedCommand
-
 
 		constexpr std::uintptr_t AttackBehaviorRva =
 			0x02F21D80;
 
 		// PlayerCombat_Update
-
 
 		constexpr std::uintptr_t PlayerCombatUpdateRva =
 			0x02EC3830;
@@ -1909,7 +1884,6 @@ namespace HJ::Hooks::ActionRequest
 		// native boost input, after reading R2 and before and al, 1
 		constexpr std::uintptr_t kExBoostInputRva =
 			0x02EBFA18;
-
 
 		const auto target =
 			base + AttackBehaviorRva;

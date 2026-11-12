@@ -4,16 +4,16 @@
 
 namespace HJ::Combat
 {
-    bool IsInCombat()
-    {
-        bool fighting = false;
+	bool IsInCombat()
+	{
+		bool fighting = false;
 
-        if (!HJ::Engine::TryGetFightingState(
-            fighting))
-        {
-            return false;
-        }
+		if (!HJ::Engine::TryGetFightingState(
+			fighting))
+		{
+			return false;
+		}
 
-        return fighting;
-    }
+		return fighting;
+	}
 }
