@@ -37,10 +37,13 @@ namespace
 
 	SafetyHookInline g_checkEligibilityHook{};
 	SafetyHookInline g_namedStateHook{};
-	SafetyHookInline g_controllerTranslateHook{};
+	SafetyHookInline g_pollAllHook{};
 	SafetyHookInline g_processHitDamageHook{};
 	SafetyHookInline g_damageStateInitHook{};
 	SafetyHookInline g_enemyDamageDispatchHook{};
+
+	std::atomic<std::uint64_t> g_padSnapshotPacked{ 0 };
+	std::uint32_t g_lastInjectedMask = 0;
 
 	std::atomic<bool> g_f6WasDown{ false };
 	std::atomic<ULONGLONG> g_traceUntil{ 0 };
@@ -910,111 +913,165 @@ namespace
 		}
 	}
 
-	std::uint64_t __fastcall ControllerTranslateHook(
-		std::uint32_t controllerIndex,
-		std::uint32_t* buttonMask,
-		float* leftStickX,
-		float* leftStickY,
-		float* rightStickX,
-		float* rightStickY,
-		std::uint8_t* buttonValues)
+	std::uint16_t GameMaskToXInputButtons(
+		std::uint16_t gameMask) noexcept
 	{
-		const std::uint64_t result =
-			g_controllerTranslateHook.call<std::uint64_t>(
-				controllerIndex,
-				buttonMask,
-				leftStickX,
-				leftStickY,
-				rightStickX,
-				rightStickY,
-				buttonValues
-			);
+		std::uint16_t out = 0;
 
-		if (controllerIndex == 0)
-		{
-			// acceptance can clear the buffer before native input finishes
-			g_rightHandTransportOn.store(false);
-		}
+		if ((gameMask & 0x0001u) != 0)
+			out |= XINPUT_GAMEPAD_A;
+		if ((gameMask & 0x0002u) != 0)
+			out |= XINPUT_GAMEPAD_B;
+		if ((gameMask & 0x0004u) != 0)
+			out |= XINPUT_GAMEPAD_X;
+		if ((gameMask & 0x0008u) != 0)
+			out |= XINPUT_GAMEPAD_Y;
+		if ((gameMask & 0x0040u) != 0)
+			out |= XINPUT_GAMEPAD_LEFT_SHOULDER;
+		if ((gameMask & 0x0080u) != 0)
+			out |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
+		if ((gameMask & 0x0400u) != 0)
+			out |= XINPUT_GAMEPAD_LEFT_THUMB;
+		if ((gameMask & 0x0800u) != 0)
+			out |= XINPUT_GAMEPAD_RIGHT_THUMB;
 
-		if (controllerIndex != 0 ||
-			buttonMask == nullptr ||
-			buttonValues == nullptr)
+		return out;
+	}
+
+	void StorePadSnapshot(
+		std::uint16_t mask,
+		std::uint8_t lt,
+		std::uint8_t rt,
+		bool active) noexcept
+	{
+		const std::uint64_t packed =
+			static_cast<std::uint64_t>(mask) |
+			(static_cast<std::uint64_t>(lt) << 16) |
+			(static_cast<std::uint64_t>(rt) << 24) |
+			(active ? (1ULL << 32) : 0ULL);
+
+		g_padSnapshotPacked.store(
+			packed,
+			std::memory_order_release
+		);
+	}
+
+	bool SafeReadPadHeader(
+		std::uintptr_t padState,
+		std::uint32_t& outSlot,
+		std::uint16_t& outMask,
+		std::uint8_t& outLT,
+		std::uint8_t& outRT) noexcept
+	{
+		__try
 		{
-			return result;
+			outSlot = *reinterpret_cast<const std::uint32_t*>(padState + 0xE0);
+			outMask = static_cast<std::uint16_t>(
+				*reinterpret_cast<const std::uint32_t*>(padState) & 0xFFFFu);
+			const auto* buttons =
+				reinterpret_cast<const std::uint8_t*>(padState + 0xA0);
+			outLT = buttons[4];
+			outRT = buttons[5];
+			return true;
 		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	void ResetPollInputState() noexcept
+	{
+		g_previousShoulders = {};
+		g_rtStableFrames = 0;
+		g_ltStableFrames = 0;
+		g_prevRawRT = false;
+		g_prevRawLT = false;
+
+		g_pendingTrigger = PendingTrigger::None;
+		g_pendingTriggerStart = 0;
+		g_pendingTriggerSequence = 0;
+		g_pendingTriggerCancelSequence = 0;
+
+		ClearBufferedHJAction();
+	}
+
+	void SafeClearInjectedMask(
+		std::uintptr_t padState,
+		std::uint32_t injectedMask) noexcept
+	{
+		if (padState == 0 || injectedMask == 0)
+			return;
+
+		__try
+		{
+			if (*reinterpret_cast<const std::uint32_t*>(padState + 0xE0) == 0)
+				*reinterpret_cast<std::uint32_t*>(padState) &= ~injectedMask;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+		}
+	}
+
+	void __fastcall PollAllHook(
+		std::uintptr_t padState,
+		std::uintptr_t rawInput)
+	{
+		SafeClearInjectedMask(padState, g_lastInjectedMask);
+		g_pollAllHook.call<void>(padState, rawInput);
+
+		if (padState == 0)
+			return;
+
+		std::uint32_t slot = 0xFFFFFFFFu;
+		std::uint16_t rawMask = 0;
+		std::uint8_t rawLTByte = 0;
+		std::uint8_t rawRTByte = 0;
+
+		if (!SafeReadPadHeader(padState, slot, rawMask, rawLTByte, rawRTByte))
+			return;
+
+		if (slot != 0)
+			return;
+
+		// acceptance can clear the buffer before native input finishes
+		g_rightHandTransportOn.store(false);
+
+		auto* buttonMask =
+			reinterpret_cast<std::uint32_t*>(padState);
+		auto* leftStickX =
+			reinterpret_cast<float*>(padState + 0x10);
+		auto* leftStickY =
+			reinterpret_cast<float*>(padState + 0x14);
+		auto* buttonValues =
+			reinterpret_cast<std::uint8_t*>(padState + 0xA0);
+
+		// snapshot pre-remap buttons so DualSense/DInput and XInput share one path
+		StorePadSnapshot(rawMask, rawLTByte, rawRTByte, true);
 
 		if (!IsGameplayInputActive())
 		{
+			g_lastInjectedMask = 0;
 			HJ::Hooks::GuardDirection::UpdateGuardButtons(0);
-
-			g_previousShoulders = {};
-			g_rtStableFrames = 0;
-			g_ltStableFrames = 0;
-			g_prevRawRT = false;
-			g_prevRawLT = false;
-
-			g_pendingTrigger =
-				PendingTrigger::None;
-
-			g_pendingTriggerStart = 0;
-			g_pendingTriggerSequence = 0;
-			g_pendingTriggerCancelSequence = 0;
-
-			ClearBufferedHJAction();
-
-			return result;
+			ResetPollInputState();
+			return;
 		}
+
+		HJ::Hooks::GuardDirection::UpdateGuardButtons(
+			GameMaskToXInputButtons(rawMask)
+		);
 
 		bool fighting = false;
 
 		if (!HJ::Engine::TryGetFightingState(fighting) ||
 			!fighting)
 		{
-			g_previousShoulders = {};
-			g_rtStableFrames = 0;
-			g_ltStableFrames = 0;
-			g_prevRawRT = false;
-			g_prevRawLT = false;
-
-			g_pendingTrigger =
-				PendingTrigger::None;
-
-			g_pendingTriggerStart = 0;
-			g_pendingTriggerSequence = 0;
-			g_pendingTriggerCancelSequence = 0;
-
-			ClearBufferedHJAction();
+			g_lastInjectedMask = 0;
+			ResetPollInputState();
 			HJ::Hooks::FighterCommand::
 				ResetCurrentAttackTracking();
-
-			return result;
+			return;
 		}
-
-		XINPUT_STATE state{};
-
-		if (XInputGetState(0, &state) != ERROR_SUCCESS)
-		{
-			HJ::Hooks::GuardDirection::UpdateGuardButtons(0);
-
-			g_previousShoulders = {};
-			g_rtStableFrames = 0;
-			g_ltStableFrames = 0;
-			g_prevRawRT = false;
-			g_prevRawLT = false;
-
-			g_pendingTrigger =
-				PendingTrigger::None;
-
-			g_pendingTriggerStart = 0;
-			g_pendingTriggerSequence = 0;
-			g_pendingTriggerCancelSequence = 0;
-
-			ClearBufferedHJAction();
-
-			return result;
-		}
-
-		HJ::Hooks::GuardDirection::UpdateGuardButtons(state.Gamepad.wButtons);
 
 		// RH1 steering prototype
 		if (leftStickX != nullptr &&
@@ -1057,20 +1114,18 @@ namespace
 		}
 
 		const bool physicalRB =
-			(state.Gamepad.wButtons &
-				XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
+			(rawMask & 0x0080u) != 0;
 
 		const bool physicalLB =
-			(state.Gamepad.wButtons &
-				XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
+			(rawMask & 0x0040u) != 0;
 
 		const bool rawRT =
-			state.Gamepad.bRightTrigger >
-			XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+			rawRTByte > XINPUT_GAMEPAD_TRIGGER_THRESHOLD ||
+			(rawMask & 0x0020u) != 0;
 
 		const bool rawLT =
-			state.Gamepad.bLeftTrigger >
-			XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+			rawLTByte > XINPUT_GAMEPAD_TRIGGER_THRESHOLD ||
+			(rawMask & 0x0010u) != 0;
 
 		// triggers as buttons need debouncing, a 1-frame flex blip
 		// from an LB/RB slam must never become a kick
@@ -1101,8 +1156,7 @@ namespace
 
 		// Circle is block, modifiers LB/RB pick side in GuardDirection hook
 		const bool physicalCircle =
-			(state.Gamepad.wButtons &
-				XINPUT_GAMEPAD_B) != 0;
+			(rawMask & 0x0002u) != 0;
 
 		const bool rbPressed =
 			physicalRB &&
@@ -1131,7 +1185,7 @@ namespace
 			buttonValues,
 			physicalCircle))
 		{
-			return result;
+			return;
 		}
 
 		// a newer hand press replaces any trigger still waiting for its chord
@@ -1255,12 +1309,12 @@ namespace
 			);
 		}
 
+		g_lastInjectedMask = (*buttonMask) & ~static_cast<std::uint32_t>(rawMask);
+
 		g_previousShoulders.rb = physicalRB;
 		g_previousShoulders.lb = physicalLB;
 		g_previousShoulders.rt = physicalRT;
 		g_previousShoulders.lt = physicalLT;
-
-		return result;
 	}
 
 	void UpdateControllerCombatInput()
@@ -1269,9 +1323,10 @@ namespace
 		static bool previousR3 = false;
 		static bool previousFighting = false;
 
-		XINPUT_STATE state{};
+		const auto pad =
+			HJ::Hooks::FighterCommand::GetPadSnapshot();
 
-		if (XInputGetState(0, &state) != ERROR_SUCCESS)
+		if (!pad.active)
 		{
 			HJ::Hooks::GuardDirection::UpdateGuardButtons(0);
 
@@ -1281,15 +1336,15 @@ namespace
 			return;
 		}
 
-		HJ::Hooks::GuardDirection::UpdateGuardButtons(state.Gamepad.wButtons);
+		HJ::Hooks::GuardDirection::UpdateGuardButtons(
+			GameMaskToXInputButtons(pad.mask)
+		);
 
 		const bool currentA =
-			(state.Gamepad.wButtons &
-				XINPUT_GAMEPAD_A) != 0;
+			(pad.mask & 0x0001u) != 0;
 
 		const bool currentR3 =
-			(state.Gamepad.wButtons &
-				XINPUT_GAMEPAD_RIGHT_THUMB) != 0;
+			(pad.mask & 0x0800u) != 0;
 
 		bool fighting = false;
 
@@ -2107,11 +2162,8 @@ namespace
 
 		if (stateName != nullptr)
 		{
-			// Identity is the per-tick player combat object, never the
-			// attack container: attack tracking resets to 0 mid-stun, and
-			// the old loose rule let any container's WaitKamae clear the
-			// latch instantly (live bug 2026-10-15: set on 0x...02F0,
-			// cleared by 0x...6AEE0/0x...189D0). Non-zero + exact match.
+			// old loose rule let any container's WaitKamae clear the
+			// latch instantly
 			const std::uintptr_t playerObject = HJ_GetPlayerCombatObject();
 
 			if (playerObject != 0 &&
@@ -2566,10 +2618,10 @@ namespace HJ::Hooks::FighterCommand
 				gameModule
 				);
 
-		// xinput_pollandtranslatecontroller
+		// xinput_pollall
 
-		constexpr std::uintptr_t ControllerTranslateRva =
-			0x019F2EC0;
+		constexpr std::uintptr_t PollAllRva =
+			0x019F6290;
 
 		constexpr std::uintptr_t CheckEligibilityRva =
 			0x02E8F500;
@@ -2588,8 +2640,8 @@ namespace HJ::Hooks::FighterCommand
 		const auto namedStateTarget =
 			base + NamedStateRva;
 
-		const auto controllerTranslateTarget =
-			base + ControllerTranslateRva;
+		const auto pollAllTarget =
+			base + PollAllRva;
 
 		{
 			std::ostringstream stream;
@@ -2665,35 +2717,35 @@ namespace HJ::Hooks::FighterCommand
 			std::ostringstream stream;
 
 			stream
-				<< "Installing controller translate hook at 0x"
+				<< "Installing XInput_PollAll hook at 0x"
 				<< std::hex
-				<< controllerTranslateTarget;
+				<< pollAllTarget;
 
 			Logger::Info(
 				stream.str()
 			);
 		}
-		g_controllerTranslateHook =
+		g_pollAllHook =
 			safetyhook::create_inline(
 				reinterpret_cast<void*>(
-					controllerTranslateTarget
+					pollAllTarget
 					),
 				reinterpret_cast<void*>(
-					&ControllerTranslateHook
+					&PollAllHook
 					)
 			);
 
-		if (!g_controllerTranslateHook)
+		if (!g_pollAllHook)
 		{
 			Logger::Error(
-				"Failed to install controller translate hook."
+				"Failed to install XInput_PollAll hook."
 			);
 
 			return false;
 		}
 
 		Logger::Info(
-			"Controller translate hook installed."
+			"XInput_PollAll hook installed."
 		);
 
 		constexpr std::uintptr_t ProcessHitDamageRva = 0x02EE4CA0;
@@ -2911,5 +2963,20 @@ namespace HJ::Hooks::FighterCommand
 				"HJ RH1 COMMITMENT TEST: attack started"
 			);
 		}
+	}
+
+	PadSnapshot GetPadSnapshot() noexcept
+	{
+		const std::uint64_t packed =
+			g_padSnapshotPacked.load(
+				std::memory_order_acquire
+			);
+
+		PadSnapshot out{};
+		out.mask = static_cast<std::uint16_t>(packed & 0xFFFFu);
+		out.lt = static_cast<std::uint8_t>((packed >> 16) & 0xFFu);
+		out.rt = static_cast<std::uint8_t>((packed >> 24) & 0xFFu);
+		out.active = ((packed >> 32) & 1u) != 0;
+		return out;
 	}
 }

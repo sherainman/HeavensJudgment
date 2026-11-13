@@ -4,6 +4,14 @@
 
 namespace HJ::Hooks::FighterCommand
 {
+	struct PadSnapshot
+	{
+		std::uint16_t mask = 0;
+		std::uint8_t lt = 0;
+		std::uint8_t rt = 0;
+		bool active = false;
+	};
+
 	enum class HJAction : std::uint8_t
 	{
 		None,
@@ -43,4 +51,6 @@ namespace HJ::Hooks::FighterCommand
 	void NotifyPlayerBlockedHit() noexcept;
 
 	void TickHitstopFrameScale() noexcept;
+
+	PadSnapshot GetPadSnapshot() noexcept;
 }

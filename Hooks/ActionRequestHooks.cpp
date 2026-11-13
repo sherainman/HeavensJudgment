@@ -226,15 +226,13 @@ namespace
 		if (isPlayerAttack &&
 			packedCommand == kHJRightLeg1)
 		{
-			XINPUT_STATE input{};
-
-			const bool hasController =
-				XInputGetState(0, &input) == ERROR_SUCCESS;
+			const auto pad =
+				HJ::Hooks::FighterCommand::GetPadSnapshot();
 
 			const bool physicalRT =
-				hasController &&
-				input.Gamepad.bRightTrigger >
-				XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+				pad.active &&
+				(pad.rt > XINPUT_GAMEPAD_TRIGGER_THRESHOLD ||
+					(pad.mask & 0x0020u) != 0);
 
 			if (!physicalRT &&
 				!HJ::Hooks::FighterCommand::IsActionOfferActive(
@@ -251,20 +249,18 @@ namespace
 		if (isPlayerAttack &&
 			packedCommand == kHJTackleAcquire)
 		{
-			XINPUT_STATE input{};
-
-			const bool hasController =
-				XInputGetState(0, &input) == ERROR_SUCCESS;
+			const auto pad =
+				HJ::Hooks::FighterCommand::GetPadSnapshot();
 
 			const bool physicalLT =
-				hasController &&
-				input.Gamepad.bLeftTrigger >
-				XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+				pad.active &&
+				(pad.lt > XINPUT_GAMEPAD_TRIGGER_THRESHOLD ||
+					(pad.mask & 0x0010u) != 0);
 
 			const bool physicalRT =
-				hasController &&
-				input.Gamepad.bRightTrigger >
-				XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+				pad.active &&
+				(pad.rt > XINPUT_GAMEPAD_TRIGGER_THRESHOLD ||
+					(pad.mask & 0x0020u) != 0);
 
 			const bool physicalTackleChord =
 				physicalLT &&
@@ -1364,12 +1360,12 @@ namespace
 			isVanillaEvadeRequest &&
 			HJ::Combat::IsInCombat())
 		{
-			XINPUT_STATE input{};
+			const auto pad =
+				HJ::Hooks::FighterCommand::GetPadSnapshot();
 
 			const bool physicalA =
-				XInputGetState(0, &input) == ERROR_SUCCESS &&
-				(input.Gamepad.wButtons &
-					XINPUT_GAMEPAD_A) != 0;
+				pad.active &&
+				(pad.mask & 0x0001u) != 0;
 
 			// fc uses a synthetic cross for r1 inputs
 			// only permit the de sway request when the player is actually pressing phys a
@@ -1561,21 +1557,12 @@ namespace
 
 		static bool previousPhysicalA = false;
 
-		XINPUT_STATE input{};
-
-		const bool hasController =
-			XInputGetState(0, &input) == ERROR_SUCCESS;
-
-		if (hasController)
-		{
-			HJ::Hooks::GuardDirection::UpdateGuardButtons(
-				input.Gamepad.wButtons);
-		}
+		const auto pad =
+			HJ::Hooks::FighterCommand::GetPadSnapshot();
 
 		const bool physicalA =
-			hasController &&
-			(input.Gamepad.wButtons &
-				XINPUT_GAMEPAD_A) != 0;
+			pad.active &&
+			(pad.mask & 0x0001u) != 0;
 
 		const bool physicalAPressed =
 			physicalA &&
