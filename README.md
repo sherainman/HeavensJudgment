@@ -43,7 +43,7 @@ implemented and playable.
 - Directional guard with live guard-side switching during a hold (neutral IDs
   `5559 / 13919 / 300`)
 - Camera anchor/assist for the boxing stance
-
+- Character hitstop with short intentional frozen frames on the anims to sell weight and improve hit confirmation.
 
 ## Planned architecture
 
@@ -75,8 +75,4 @@ The MIT license covers this repository's own source code and nothing else. See
 the disclaimer above. Third-party code keeps its own license: safetyhook is
 Boost 1.0 and Zydis is MIT, both under `external/` with their notices. No game
 asset archives, extracted animation data or other SEGA/RGG Studio content is
-included in this repository, apart from the single user-supplied HUD
-regression screenshot under `tools/hjbench/fixtures/`; that frame is not
-covered by the MIT license and should be replaced with a synthetic or
-clean-room fixture before any public distribution that requires one.
-
+included in this repository.
